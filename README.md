@@ -147,9 +147,13 @@ The levels offered to Jev are computed for the target model, first hit wins:
 3. `effortLevels`, default `["low", "medium", "high"]`: the slice essentially every provider
    expresses, so a choice is always expressible.
 
-If the model reports `compatibility.supportsEffortUpdates: false`, nothing is injected. The
-decision is cached per session and digest for `rejudgeAfterMs`, so a turn asks once, and a
-failure fails open with the request untouched. v1 has no effort parts, so this is v2-only.
+The part is injected **only** when the host explicitly declares
+`compatibility.supportsEffortUpdates: true` for the model. Silence is not permission: a protocol
+that does not expect an effort part rejects the entire request (an OpenAI-chat run fails with
+"user messages only support text and media content"), so anything other than an explicit yes
+does nothing. The decision is cached per session and digest for `rejudgeAfterMs`, so a turn asks
+once, and a failure fails open with the request untouched. v1 has no effort parts, so this is
+v2-only.
 
 ## Measured
 

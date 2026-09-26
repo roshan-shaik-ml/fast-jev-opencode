@@ -307,7 +307,7 @@ if (live) {
     process.exitCode = 1
     process.exit()
   }
-  writeFileSync(envPath, `TYPESAFE_API_KEY=${key}\n`)
+  writeFileSync(envPath, `TYPESAFE_API_KEY=${key}\n`, { mode: 0o600 })
 } else {
   process.env.TYPESAFE_API_KEY = "bench-offline-key"
 }

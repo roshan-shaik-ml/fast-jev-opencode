@@ -327,6 +327,17 @@ console.log("\n[effort]")
   writeCfg({ effortEnabled: true, rejudgeAfterMs: 0 })
   answerer = (name) =>
     name === "effort" ? { probabilities: { low: 0.05, medium: 0.1, high: 0.85 } } : 1
+
+  // The live regression: a protocol that does not expect an effort part rejects
+  // the whole request, so silence from the host has to mean "do nothing".
+  const undeclared = fixture("eff-undeclared")
+  await runEffort(undeclared)
+  check("effort: no declared support injects nothing", effortParts(undeclared).length === 0)
+
+  modelInfos["opencode-go/qwen3.8-max"] = {
+    variants: [],
+    compatibility: { supportsEffortUpdates: true },
+  }
   const on = fixture("eff-on")
   await runEffort(on)
   const injected = effortParts(on)
@@ -370,7 +381,10 @@ console.log("\n[effort]")
     effortParts(unsupported).length === 0,
   )
 
-  delete modelInfos["opencode-go/qwen3.8-max"]
+  modelInfos["opencode-go/qwen3.8-max"] = {
+    variants: [],
+    compatibility: { supportsEffortUpdates: true },
+  }
   answerer = () => 1
   const silent = fixture("eff-silent")
   await runEffort(silent)

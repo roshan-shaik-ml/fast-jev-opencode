@@ -339,8 +339,12 @@ export const FastJevV2 = Plugin.define({
       sessionID: string | undefined,
     ): Promise<{ level: EffortLevel; ladder: EffortLevel[]; requests: number } | undefined> => {
       const support = modelSupport(ctx, model)
-      if (support.supports === false) {
-        if (cfg.log) log("debug", "effort: model does not accept effort updates")
+      // A content part the protocol does not expect is not a no-op: an OpenAI-chat
+      // request fails outright ("user messages only support text and media
+      // content"), which a live run confirmed. So an explicit yes is required and
+      // silence means nothing is injected.
+      if (support.supports !== true) {
+        if (cfg.log) log("debug", "effort: model does not declare effort support; nothing injected")
         return undefined
       }
       const ladder = effortLadder(cfg, model?.providerID, model?.id, support.variants)
