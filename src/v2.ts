@@ -7,6 +7,7 @@ import {
   plan,
   resolveApiKey,
   shouldWarnConfig,
+  shrinkInput,
   stubbedResultText,
   truncatedResultText,
   type CallAction,
@@ -113,6 +114,9 @@ export function applyActions(
           continue
         }
         const state = part.state
+        if (state && typeof state.input === "object" && state.input !== null) {
+          state.input = shrinkInput(state.input, headChars)
+        }
         if (state && state.status === "completed" && Array.isArray(state.content)) {
           for (const entry of state.content) {
             if (entry && entry.type === "text" && typeof entry.text === "string") {

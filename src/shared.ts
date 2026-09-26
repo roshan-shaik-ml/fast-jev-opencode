@@ -337,6 +337,29 @@ export function truncatedResultText(text: string, isError: boolean, headChars: n
   }; re-run the tool if needed]`
 }
 
+/**
+ * Cut the oversized string values out of a call's input.
+ *
+ * A cleared call keeps its place, but its payload is often the biggest thing in
+ * the request: an edit carries the old and new text of a file, a shell call
+ * carries a whole heredoc. Clearing the output while shipping the input is only
+ * half a removal.
+ */
+export function shrinkInput(
+  input: Record<string, unknown>,
+  headChars: number,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(input ?? {})) {
+    if (typeof value === "string" && value.length > headChars) {
+      out[key] = `${value.slice(0, headChars)}…[fast-jev cleared ${value.length - headChars} chars]`
+    } else {
+      out[key] = value
+    }
+  }
+  return out
+}
+
 /** The note left when a call is stubbed rather than deleted. */
 export function stubbedResultText(text: string, isError: boolean, headChars: number): string {
   if (text.length <= headChars + 120) return text

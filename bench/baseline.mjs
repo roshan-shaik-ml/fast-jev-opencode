@@ -1,4 +1,4 @@
-import { createServer } from "node:http"
+﻿import { createServer } from "node:http"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -39,7 +39,9 @@ const totalNeededTokens = needed.reduce((sum, entry) => sum + entry.tokens.lengt
 
 function probability(name) {
   const slot = Number(name.match(/_(\d+)$/)?.[1] ?? "1")
-  return name.startsWith("call_") ? (slot % 3 === 2 ? 0.2 : 0.9) : slot % 3 === 1 ? 0.2 : 0.9
+  const bucket = slot % 3
+  if (name.startsWith("call_")) return bucket === 2 ? 0.2 : 0.9
+  return bucket === 0 ? 0.9 : 0.2
 }
 
 let requestCount = 0

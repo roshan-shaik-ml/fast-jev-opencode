@@ -320,20 +320,24 @@ run against your own transcripts, not a settled result.
 read-only) and runs the same comparison over a session that actually happened:
 
 ```
-session      "Investigating fast-jev" — 400 messages, 443 eligible calls
-chars        1,366,526 -> 1,182,525   (-13.5%)
-jev requests 2
+session      "Investigating fast-jev" — 400 messages, 447 tool calls
+chars        1,146,807 = 131k prose + 497k tool inputs + 518k tool outputs
 
-             needed calls intact   evidence tokens kept
-ours             222/241              4742/5881
-head+tail        218/241              4738/5881
+                       chars before   after    saved   jev requests
+ours (defaults)          1,146,807   847,062   26.1%      1
+aggressive settings      1,146,807   603,577   47.4%      7
 ```
 
-**On real traffic the selection beats plain truncation by about 2%, at the same size.** That is
-a narrow margin, and it agrees with the independent replay quoted above. Read the project
-accordingly: the value is that pruning is **safe** - pairing preserved, text untouched, secrets
-redacted, failures failing open - not that the choosing is clever. The same run also reports
-the session's own economics, where cache reads dominated input by ~96x.
+Two things to read from that. The **defaults give up about twenty points** to the aggressive
+settings - that gap is `minResultChars` (only outputs over 2000 characters are candidates) and
+`removedCallStyle: "stub"` instead of deleting calls outright. And roughly **half the payload in
+a real session is tool _inputs_** - edit payloads, shell bodies - which is why clearing outputs
+alone tops out around 10%: a call whose output is cleared but whose input still ships has only
+been half removed.
+
+The evidence comparison on the same session is roughly a tie with plain truncation, which
+matches the independent replay quoted above. So install this for the safety - pairing
+preserved, text untouched, secrets redacted, failures failing open - not for a magic number.
 
 ## Test
 

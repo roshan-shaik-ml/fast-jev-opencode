@@ -6,6 +6,7 @@ import {
   plan,
   resolveApiKey,
   shouldWarnConfig,
+  shrinkInput,
   stubbedResultText,
   truncatedResultText,
   type CallAction,
@@ -94,6 +95,7 @@ export function applyActions(
           continue
         }
         const state = part.state
+        if (state) state.input = shrinkInput(state.input ?? {}, headChars)
         if (state && state.status === "completed" && typeof state.output === "string") {
           state.output = stubbedResultText(state.output, false, headChars)
         } else if (state && state.status === "error" && typeof state.error === "string") {
