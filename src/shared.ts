@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import type { Plugin } from "@opencode-ai/plugin"
 import {
   JevClient,
   batchCalls,
@@ -17,9 +16,9 @@ import {
   type JevState,
 
 
-type Provider = "typesafe" | "zen" | "openrouter" | "custom"
+export type Provider = "typesafe" | "zen" | "openrouter" | "custom"
 
-interface Config {
+export interface Config {
   enabled: boolean
   dryRun: boolean
   provider: Provider
@@ -40,7 +39,7 @@ interface Config {
   log: boolean
 }
 
-const PRESETS: Record<
+export const PRESETS: Record<
   Exclude<Provider, "custom">,
   { baseUrl: string; model: string; apiKeyEnv: string }
 > = {
@@ -95,7 +94,17 @@ const ENV_PATH = process.env.FAST_JEV_ENV || join(homedir(), ".config", "opencod
 let configIssues: string[] = []
 let configWarned = false
 
-function stripJsonComments(input: string): string {
+export function getConfigIssues(): string[] {
+  return configIssues
+}
+
+export function shouldWarnConfig(): boolean {
+  if (configIssues.length === 0 || configWarned) return false
+  configWarned = true
+  return true
+}
+
+export function stripJsonComments(input: string): string {
   let out = ""
   let inString = false
   let escaped = false
@@ -175,7 +184,7 @@ function pickNum(value: unknown, fallback: number, min: number, max: number): nu
   return Math.min(max, Math.max(min, n))
 }
 
-function loadConfig(): Config {
+export function loadConfig(): Config {
   const file = readConfigFile()
   const rawProvider = file.provider
   const provider: Provider =
@@ -223,7 +232,7 @@ function loadConfig(): Config {
   }
 }
 
-function resolveApiKey(cfg: Config): string {
+export function resolveApiKey(cfg: Config): string {
   if (cfg.apiKey) return cfg.apiKey
   if (cfg.apiKeyEnv && process.env[cfg.apiKeyEnv]) return process.env[cfg.apiKeyEnv] as string
   const fromEnvFile = readEnvFile(cfg.apiKeyEnv)
@@ -238,65 +247,27 @@ function resolveApiKey(cfg: Config): string {
   return ""
 }
 
-interface OpenCodePart {
-  type?: string
-  text?: string
-  callID?: string
-  tool?: string
-  state?: {
-    status?: string
-    input?: Record<string, unknown>
-    output?: string
-    error?: string
-  }
+export function makeAsker(cfg: Config, apiKey: string): JevAsker {
+  return new JevClient({
+    apiKey,
+    model: cfg.model || undefined,
+    baseUrl: cfg.baseUrl || undefined,
+    fetch: (input, init) => {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), cfg.timeoutMs)
+      return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer))
+    },
+  })
 }
 
-interface OpenCodeMessage {
-  info?: { role?: string }
-  parts: OpenCodePart[]
-}
-
-interface JevMessage {
+export interface JevMessage {
   role: "user" | "assistant"
   text: string
   toolUses: { tool_use_id: string; tool: string; input: Record<string, unknown> }[]
   toolResults?: { tool_use_id: string; text: string; isError?: boolean }[]
 }
 
-function toJevMessages(messages: OpenCodeMessage[]): JevMessage[] {
-  const out: JevMessage[] = []
-  for (const message of messages) {
-    let text = ""
-    const toolUses: JevMessage["toolUses"] = []
-    const toolResults: NonNullable<JevMessage["toolResults"]> = []
-    for (const part of message.parts ?? []) {
-      if (!part || typeof part !== "object") continue
-      if (part.type === "text" && typeof part.text === "string") {
-        text = text ? `${text}\n${part.text}` : part.text
-      } else if (part.type === "tool") {
-        const state = part.state ?? {}
-        const id = String(part.callID ?? "")
-        if (!id) continue
-        toolUses.push({ tool_use_id: id, tool: String(part.tool ?? ""), input: state.input ?? {} })
-        if (state.status === "completed") {
-          toolResults.push({ tool_use_id: id, text: String(state.output ?? ""), isError: false })
-        } else if (state.status === "error") {
-          toolResults.push({ tool_use_id: id, text: String(state.error ?? ""), isError: true })
-        }
-      }
-    }
-    const jev: JevMessage = {
-      role: message.info?.role === "assistant" ? "assistant" : "user",
-      text,
-      toolUses,
-    }
-    if (toolResults.length > 0) jev.toolResults = toolResults
-    out.push(jev)
-  }
-  return out
-}
-
-function truncatedResultText(text: string, isError: boolean, headChars: number): string {
+export function truncatedResultText(text: string, isError: boolean, headChars: number): string {
   if (text.length <= headChars + 120) return text
   const head = headChars > 0 ? `${text.slice(0, headChars)}\n` : ""
 
@@ -323,7 +294,7 @@ function pruneCache(now: number, ttl: number): void {
   }
 }
 
-interface Plan {
+export interface Plan {
   actions: Map<string, CallAction>
   calls: number
   candidates: number
@@ -331,7 +302,7 @@ interface Plan {
   stateTokens: number
 }
 
-async function plan(messages: OpenCodeMessage[], cfg: Config, asker: JevAsker): Promise<Plan> {
+export async function plan(jev: JevMessage[], cfg: Config, asker: JevAsker): Promise<Plan> {
   const options = resolveOptions({
     keepThreshold: cfg.keepThreshold,
     preserveRecentMessages: cfg.preserveRecentMessages,
@@ -339,7 +310,6 @@ async function plan(messages: OpenCodeMessage[], cfg: Config, asker: JevAsker): 
     maxRequestTokens: cfg.maxRequestTokens,
     truncateHeadChars: cfg.truncateHeadChars,
   })
-  const jev = toJevMessages(messages)
   const calls = collectToolCalls(jev, options.preserveRecentMessages)
   const now = Date.now()
   pruneCache(now, cfg.rejudgeAfterMs)
@@ -397,123 +367,4 @@ async function plan(messages: OpenCodeMessage[], cfg: Config, asker: JevAsker): 
   return { actions, calls: calls.length, candidates: needed.length, requests, stateTokens }
 }
 
-function applyActions(
-  messages: OpenCodeMessage[],
-  actions: Map<string, CallAction>,
-  headChars: number,
-): { droppedCalls: number; droppedResults: number; removedMessages: number } {
-  let droppedCalls = 0
-  let droppedResults = 0
-  let removedMessages = 0
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]
-    const parts = message.parts ?? []
-    const onlyTools = parts.length > 0 && parts.every((part) => part && part.type === "tool")
-    for (let j = parts.length - 1; j >= 0; j--) {
-      const part = parts[j]
-      if (!part || part.type !== "tool") continue
-      const action = actions.get(String(part.callID ?? ""))
-      if (action === "drop_call") {
-        parts.splice(j, 1)
-        droppedCalls += 1
-        continue
-      }
-      if (action === "drop_result") {
-        const state = part.state
-        if (!state) continue
-        if (state.status === "completed" && typeof state.output === "string") {
-          const next = truncatedResultText(state.output, false, headChars)
-          if (next !== state.output) {
-            state.output = next
-            droppedResults += 1
-          }
-        } else if (state.status === "error" && typeof state.error === "string") {
-          const next = truncatedResultText(state.error, true, headChars)
-          if (next !== state.error) {
-            state.error = next
-            droppedResults += 1
-          }
-        }
-      }
-    }
-    if (onlyTools && parts.length === 0) {
-      messages.splice(i, 1)
-      removedMessages += 1
-    }
-  }
-  return { droppedCalls, droppedResults, removedMessages }
-}
-
-export const FastJev: Plugin = async ({ client }) => {
-  const log = (level: "debug" | "info" | "warn" | "error", message: string, extra?: unknown) => {
-    try {
-      const result = client?.app?.log({ body: { service: "fast-jev", level, message, extra } })
-      void Promise.resolve(result).catch(() => {})
-    } catch {
-      /* fail-open */
-    }
-  }
-
-  return {
-    "experimental.chat.messages.transform": async (_input, output) => {
-      try {
-        const cfg = loadConfig()
-        if (configIssues.length > 0 && !configWarned) {
-          configWarned = true
-          log("warn", `config: ${configIssues.join("; ")}`)
-        }
-        if (!cfg.enabled) return
-        const messages = output.messages as unknown as OpenCodeMessage[]
-        if (!Array.isArray(messages) || messages.length === 0) return
-
-        const apiKey = resolveApiKey(cfg)
-        if (!apiKey) {
-          if (cfg.log) log("warn", "no Jev API key configured; leaving request untouched")
-          return
-        }
-        const asker = new JevClient({
-          apiKey,
-          model: cfg.model || undefined,
-          baseUrl: cfg.baseUrl || undefined,
-          fetch: (input, init) => {
-            const controller = new AbortController()
-            const timer = setTimeout(() => controller.abort(), cfg.timeoutMs)
-            return fetch(input, { ...init, signal: controller.signal }).finally(() =>
-              clearTimeout(timer),
-            )
-          },
-        })
-        const result = await plan(messages, cfg, asker)
-        if (result.actions.size === 0) {
-          if (cfg.log && result.candidates > 0)
-            log("debug", "no stale tool calls to prune", { calls: result.calls })
-          return
-        }
-        if (cfg.dryRun) {
-          if (cfg.log)
-            log("info", `dry-run: would prune ${result.actions.size} tool call(s)`, {
-              candidates: result.candidates,
-              requests: result.requests,
-              stateTokens: result.stateTokens,
-            })
-          return
-        }
-        const applied = applyActions(messages, result.actions, cfg.truncateHeadChars)
-        if (cfg.log)
-          log("info", "pruned outgoing request", {
-            ...applied,
-            requests: result.requests,
-            stateTokens: result.stateTokens,
-          })
-      } catch (error) {
-        try {
-          log("warn", `fail-open: ${error instanceof Error ? error.message : String(error)}`)
-        } catch {
-          /* fail-open */
-        }
-      }
-    },
-  }
-}
-
-export default FastJev
+export type { CallAction }

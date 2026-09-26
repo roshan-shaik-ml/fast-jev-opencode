@@ -54,7 +54,7 @@ function writeCfg(overrides = {}) {
 
 writeCfg()
 
-const pluginUrl = pathToFileURL(join(process.cwd(), "plugins", "fast-jev.ts")).href
+const pluginUrl = pathToFileURL(join(process.cwd(), "src", "v1.ts")).href
 const mod = await import(pluginUrl)
 const plugin = mod.default
 if (typeof plugin !== "function") throw new Error("default export is not a plugin function")

@@ -222,7 +222,7 @@ if (live) {
   process.env.TYPESAFE_API_KEY = "bench-offline-key"
 }
 
-const pluginPath = pathToFileURL(join(process.cwd(), "plugins", "fast-jev.ts")).href
+const pluginPath = pathToFileURL(join(process.cwd(), "src", "v1.ts")).href
 const { default: plugin } = await import(pluginPath)
 const hooks = await plugin({
   client: { app: { log: async () => {} } },

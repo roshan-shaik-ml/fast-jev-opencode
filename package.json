@@ -1,11 +1,11 @@
 {
   "name": "fast-jev-opencode",
-  "version": "0.1.0",
-  "description": "OpenCode v1 plugin: prune stale tool calls and truncate bulky tool results from the outgoing model request using TypeSafe Jev decisions, instead of summarizing context.",
+  "version": "0.2.0",
+  "description": "Verbatim context pruning for OpenCode v1 and v2: prune stale tool calls and truncate bulky tool results from the outgoing model request using TypeSafe Jev decisions, instead of summarizing context.",
   "type": "module",
-  "main": "plugins/fast-jev.ts",
+  "main": "src/index.ts",
   "exports": {
-    ".": "./plugins/fast-jev.ts"
+    ".": "./src/index.ts"
   },
   "license": "MIT",
   "repository": {
@@ -28,7 +28,7 @@
     "context"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types fast-jev.test.mjs",
+    "test": "node --experimental-strip-types test/v1.test.mjs && node --experimental-strip-types test/v2.test.mjs",
     "bench": "node --experimental-strip-types bench/benchmark.mjs",
     "bench:savings": "node --experimental-strip-types bench/savings.mjs",
     "format": "prettier --write .",
@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.18.32",
+    "@opencode/plugin": "^2.0.18",
 
   },
   "devDependencies": {

@@ -2,21 +2,44 @@
 
 [![CI](https://github.com/roshan-shaik-ml/fast-jev-opencode/actions/workflows/ci.yml/badge.svg)](https://github.com/roshan-shaik-ml/fast-jev-opencode/actions/workflows/ci.yml)
 
-Verbatim context pruning for [OpenCode](https://opencode.ai) **v1**, powered by
-[TypeSafe Jev](https://docs.typesafe.ai). Instead of summarizing old turns, it
-scores every tool call and tool result with Jev and removes or truncates only
-the stale ones. Everything that stays is kept word for word.
+Verbatim context pruning for [OpenCode](https://opencode.ai) **v1 and v2**, powered by
+[TypeSafe Jev](https://docs.typesafe.ai). Instead of summarizing old turns, it scores every
+tool call and tool result with Jev and removes or truncates only the stale ones. Everything
+that stays is kept word for word.
 
-This is the OpenCode **v1** counterpart of
+One package, two adapters. The v2 adapter uses `ctx.session.hook("context", ...)`; the v1
+adapter uses the legacy `experimental.chat.messages.transform` hook. The upstream
 
-(MIT). That project targets Claude Code; the other community ports target
-OpenCode V2's `context` hook. OpenCode v1 does not have that hook, so this port
-uses `experimental.chat.messages.transform` instead.
+Claude Code; this project reuses its engine and ports the decision loop to OpenCode.
+
+## Compatibility
+
+| Host                | Entry        | Hook                                   | Minimum                       |
+| ------------------- | ------------ | -------------------------------------- | ----------------------------- |
+| OpenCode **v2**     | `setup()`    | `ctx.session.hook("context", ...)`     | any v2                        |
+| OpenCode **v1**     | `server()`   | `experimental.chat.messages.transform` | 1.18.29+ (object entrypoints) |
+| OpenCode v1 (older) | plugin array | `experimental.chat.messages.transform` | pin `#v0.1.0`                 |
+
+Both entrypoints are exported from one default export, the shape documented in
+[the v2 migration guide](https://opencode.ai/v2/docs/build/plugins/migrate-v1):
+
+```ts
+export default {
+  ...FastJevV2, // V2 calls setup()
+  async server(input, options) {
+    return FastJevV1(input, options) // V1 calls server()
+  },
+}
+```
+
+A difference worth knowing: in v1 the message hook also runs for the request that builds a
+`/compact` summary, so the pruner saw that request too. In v2 `context` covers only the agent
+loop — compaction is a separate hook this plugin does not register.
 
 ## How it works
 
 ```
-outgoing request -> map OpenCode tool parts to the library message model
+outgoing request -> map OpenCode messages to the library message model
                  -> ask Jev two noul questions per candidate tool call
                     (keep the call? keep the result?)
                  -> drop_call / drop_result / keep
@@ -24,55 +47,54 @@ outgoing request -> map OpenCode tool parts to the library message model
 ```
 
 A candidate is a tool call that is not pinned (first message / newest
-`preserveRecentMessages`), whose result is at least `minResultChars`, and whose
-tool is not in `protectTools`.
+`preserveRecentMessages`), whose result is at least `minResultChars`, and whose tool is not in
+`protectTools`.
 
-- **Non-destructive:** persisted history, the UI, and stored sessions are never
-  modified. Only the request sent to the model is changed. (OpenCode also runs
-  this hook on the request that _builds_ a `/compact` summary, so that request is
-  pruned too; the stored transcript still is not.)
-- **Verbatim:** user and assistant text is never rewritten. Only tool calls and
-  tool outputs are dropped or truncated.
-- **Fail-open:** a missing key, timeout, transport error, bad answer, or any
-  other failure leaves the request untouched.
-- **Cached:** decisions are cached per tool call id, so the same call is not
-  re-scored on every request (`rejudgeAfterMs`).
-- **Pinned:** the first message and the newest `preserveRecentMessages` messages
-  are never touched.
+- **Non-destructive:** persisted history, the UI, and stored sessions are never modified. Only
+  the request sent to the model is changed.
+- **Verbatim:** user and assistant text is never rewritten. Only tool calls are dropped and
+  tool outputs truncated.
+- **Fail-open:** a missing key, timeout, transport error, malformed answer, or unreadable
+  config leaves the request untouched.
+- **Cached:** decisions are cached per tool call id, so the same call is not re-scored on every
+  request (`rejudgeAfterMs`).
 
 ## Install
 
-### Option A - one command (recommended)
+### OpenCode v2
 
-OpenCode fetches the plugin and its dependency for you. Add it to
-`~/.config/opencode/opencode.json`:
+```sh
+opencode plugin add github:roshan-shaik-ml/fast-jev-opencode
+```
 
-```json
+Or reference it from `~/.config/opencode/opencode.json` as a package:
+
+```jsonc
 {
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git"]
+  "plugins": ["fast-jev-opencode"],
 }
 ```
 
-Or let the CLI edit the global config for you (`-g`; without it the CLI writes
-the project-local config):
+### OpenCode v1 (1.18.29+)
 
-```sh
-opencode plugin fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git -g
+Add the package to `~/.config/opencode/opencode.json`:
+
+```jsonc
+{
+  "plugin": ["fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git"],
+}
 ```
 
-### Option B - local file
+### OpenCode v1 (older than 1.18.29)
 
-OpenCode v1 loads only top-level `*.ts` / `*.js` files in the global plugin
-directory (`~/.config/opencode/plugin/` or `~/.config/opencode/plugins/`); it
-does **not** recurse into subfolders. Install the dependency at the config root,
-then drop the plugin file in place:
+Older releases cannot load an object entrypoint. Pin the v1-only release:
 
-```sh
-cd ~/.config/opencode
-
-curl -fsSL -o plugins/fast-jev.ts \
-  https://raw.githubusercontent.com/roshan-shaik-ml/fast-jev-opencode/main/plugins/fast-jev.ts
+```jsonc
+{
+  "plugin": [
+    "fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git#v0.1.0",
+  ],
+}
 ```
 
 ### Finish setup
@@ -87,16 +109,16 @@ curl -fsSL -o plugins/fast-jev.ts \
 
 2. Add your Jev key - see [TypeSafe API key](#typesafe-api-key).
 
-3. Restart OpenCode. It starts in `dryRun` mode, so nothing is pruned until you
-   set `"dryRun": false` in `fast-jev.json`.
+3. Restart OpenCode. It starts in `dryRun` mode, so nothing is pruned until you set
+   `"dryRun": false` in `fast-jev.json`.
 
 ## TypeSafe API key
 
 The plugin needs a Jev key. Create one in the TypeSafe console at
 <https://console.typesafe.ai>, then give it to the plugin.
 
-`apiKeyEnv` (default `TYPESAFE_API_KEY`) is the environment-variable **name** the
-plugin looks up. The key is resolved in this order, first hit wins:
+`apiKeyEnv` (default `TYPESAFE_API_KEY`) is the environment-variable **name** the plugin looks
+up. The key is resolved in this order, first hit wins:
 
 1. `apiKey` in `~/.config/opencode/fast-jev.json` (inline; not recommended)
 2. the `TYPESAFE_API_KEY` environment variable of the **OpenCode server process**
@@ -105,9 +127,6 @@ plugin looks up. The key is resolved in this order, first hit wins:
 
 ### Option 1 - the `.env` file (recommended)
 
-`~/.config/opencode/.env` is read on every request, so `fast-jev.json` never has
-to hold a secret. Create the file (or append a line):
-
 ```sh
 printf 'TYPESAFE_API_KEY=your-key-here\n' >> ~/.config/opencode/.env
 ```
@@ -115,8 +134,6 @@ printf 'TYPESAFE_API_KEY=your-key-here\n' >> ~/.config/opencode/.env
 Keep `.env` out of version control.
 
 ### Option 2 - the server environment
-
-Set the variable before starting OpenCode:
 
 ```sh
 # macOS / Linux
@@ -131,8 +148,7 @@ $env:TYPESAFE_API_KEY = "your-key-here"; opencode
 
 ### Option 3 - inline in the config
 
-Only if you cannot use an environment variable. Add the key to
-`~/.config/opencode/fast-jev.json`:
+Only if you cannot use an environment variable:
 
 ```json
 { "apiKey": "your-key-here" }
@@ -140,17 +156,16 @@ Only if you cannot use an environment variable. Add the key to
 
 ### Using another provider
 
-Set `provider` in `fast-jev.json` to `zen` or `openrouter` and supply that
-provider's key instead (`OPENCODE_API_KEY` or `OPENROUTER_API_KEY`). For anything
-else, use `provider: "custom"` with `baseUrl`, `model`, and `apiKeyEnv`.
+Set `provider` in `fast-jev.json` to `zen` or `openrouter` and supply that provider's key
+instead (`OPENCODE_API_KEY` or `OPENROUTER_API_KEY`). For anything else, use
+`provider: "custom"` with `baseUrl`, `model`, and `apiKeyEnv`.
 
-Without a valid key the plugin fails open: it logs a warning and sends the
-request unchanged.
+Without a valid key the plugin fails open: it logs a warning and sends the request unchanged.
 
 ## Configure
 
-`~/.config/opencode/fast-jev.json` is re-read on every request, so edits apply
-without a restart. The shipped example is observe-only (`dryRun: true`).
+`~/.config/opencode/fast-jev.json` is re-read on every request, so edits apply without a
+restart. The shipped example is observe-only (`dryRun: true`).
 
 | Option                   | Default    | Meaning                                                      |
 | ------------------------ | ---------- | ------------------------------------------------------------ |
@@ -171,7 +186,9 @@ without a restart. The shipped example is observe-only (`dryRun: true`).
 | `protectTools`           | `[]`       | Tool names whose calls/results are always kept               |
 | `rejudgeAfterMs`         | `600000`   | Re-score a call after this long; `0` re-scores every request |
 | `timeoutMs`              | `30000`    | Per-request deadline; a stalled endpoint fails open          |
-| `log`                    | `true`     | Structured logging via the OpenCode client                   |
+| `log`                    | `true`     | Structured logging via the host client                       |
+
+Set `FAST_JEV_CONFIG` to point the plugin at a different config file (used by the tests).
 
 Provider presets:
 
@@ -194,9 +211,8 @@ npm run bench:savings  # token savings, with and without Jev
 
 ### Parity with the Claude Code port
 
-`bench/benchmark.mjs` feeds an identical transcript to the upstream engine
 
-identical set of Jev answers:
+and to the adapter, with an identical set of Jev answers:
 
 ```
 transcript: 31 messages, 24 tool calls, 98478 chars
@@ -207,13 +223,12 @@ cache       second request: 0 jev request(s)
 overhead    no eligible calls: 1 ms (mapping only, no Jev call)
 ```
 
-Same decisions and same reduction as the Claude Code port; the adapter adds
-milliseconds.
+Same decisions and same reduction as the Claude Code port; the adapter adds milliseconds.
 
 ### Token savings, with and without Jev
 
-`bench/savings.mjs` replays a small realistic task - fix a failing `/login` test -
-and measures the tokens in the outgoing request before and after pruning.
+Replays a small realistic task - fix a failing `/login` test - and measures the tokens in the
+outgoing request before and after pruning.
 
 ```
 transcript     14 messages, 6 tool calls
@@ -226,33 +241,28 @@ with Jev, by keepThreshold:
   0.15          891    - 34.4%   keep=4 drop_result=2 drop_call=0
 ```
 
-Example run against the live TypeSafe endpoint. Three threshold passes cost **one**
-Jev request: decisions are cached and re-decided locally when the threshold
-changes.
+Example run against the live TypeSafe endpoint. Three threshold passes cost **one** Jev
+request: decisions are cached and re-decided locally when the threshold changes.
 
-Note that `keepThreshold` trades savings against recall. At the upstream default
-of `0.5` this transcript loses everything, including the edit and the passing test
-run; at `0.15` every call is kept and only two bulky results are truncated. Tune
-it against your own traffic, starting low.
+`keepThreshold` trades savings against recall. At the upstream default of `0.5` this
+transcript loses everything, including the edit and the passing test run; at `0.15` every call
+is kept and only two bulky results are truncated. Tune it against your own traffic, starting
+low.
 
-Tokens are estimated with the same estimator the plugin uses to plan requests,
-not provider-billed tokens.
+Tokens are estimated with the same estimator the plugin uses to plan requests, not
+provider-billed tokens.
 
 ## Test
 
-Offline; no network and no key. The harness starts a local mock System One
-endpoint and drives the plugin's hook end to end. Requires Node >= 22.6 (the
-test runner uses `--experimental-strip-types`).
+Offline; no network and no key. Each suite starts a local mock System One endpoint and drives
+the real entrypoint: `test/v1.test.mjs` through the v1 hook, `test/v2.test.mjs` through
+`setup()` / `server()`. Requires Node >= 22.6 (the runner uses
+`--experimental-strip-types`).
 
 ```sh
 npm test
 npm run format:check
 ```
-
-## Compatibility
-
-Built and verified against OpenCode **1.18.32** (`experimental.chat.messages.transform`).
-OpenCode V2 uses a different plugin API and is not supported by this port.
 
 ## Credits
 
