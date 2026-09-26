@@ -1,4 +1,4 @@
-import { createServer } from "node:http"
+﻿import { createServer } from "node:http"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -148,7 +148,7 @@ const tools = truncated.flatMap((m) => m.content ?? []).filter((p) => p.type ===
 check("drop_result: tool parts kept", tools.length === 3, `got ${tools.length}`)
 check(
   "drop_result: content truncated with note",
-
+  tools.every((p) => p.state.content[0].text.includes("fast-jev pruned")),
 )
 check(
   "drop_result: head preserved",
@@ -169,7 +169,7 @@ const errTool = errMessages
   .find((p) => p.type === "tool" && p.id === "err-1")
 check(
   "error result: message truncated with (error) note",
-
+  errTool.state.error.message.includes("fast-jev pruned") &&
     errTool.state.error.message.includes("(error)"),
 )
 

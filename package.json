@@ -36,8 +36,7 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.18.32",
-    "@opencode/plugin": "^2.0.18",
-
+    "@opencode/plugin": "^2.0.18"
   },
   "devDependencies": {
     "prettier": "^3.4.2"

@@ -8,7 +8,7 @@ import {
   shouldWarnConfig,
   truncatedResultText,
   type CallAction,
-  type JevMessage,
+  type TranscriptMessage,
 } from "./shared.ts"
 
 interface V1Part {
@@ -29,12 +29,12 @@ interface V1Message {
   parts: V1Part[]
 }
 
-export function toJevMessages(messages: V1Message[]): JevMessage[] {
-  const out: JevMessage[] = []
+export function toTranscriptMessages(messages: V1Message[]): TranscriptMessage[] {
+  const out: TranscriptMessage[] = []
   for (const message of messages) {
     let text = ""
-    const toolUses: JevMessage["toolUses"] = []
-    const toolResults: NonNullable<JevMessage["toolResults"]> = []
+    const toolUses: TranscriptMessage["toolUses"] = []
+    const toolResults: NonNullable<TranscriptMessage["toolResults"]> = []
     for (const part of message.parts ?? []) {
       if (!part || typeof part !== "object") continue
       if (part.type === "text" && typeof part.text === "string") {
@@ -43,15 +43,15 @@ export function toJevMessages(messages: V1Message[]): JevMessage[] {
         const state = part.state ?? {}
         const id = String(part.callID ?? "")
         if (!id) continue
-        toolUses.push({ tool_use_id: id, tool: String(part.tool ?? ""), input: state.input ?? {} })
+        toolUses.push({ id, name: String(part.tool ?? ""), input: state.input ?? {} })
         if (state.status === "completed") {
-          toolResults.push({ tool_use_id: id, text: String(state.output ?? ""), isError: false })
+          toolResults.push({ id, text: String(state.output ?? ""), isError: false })
         } else if (state.status === "error") {
-          toolResults.push({ tool_use_id: id, text: String(state.error ?? ""), isError: true })
+          toolResults.push({ id, text: String(state.error ?? ""), isError: true })
         }
       }
     }
-    const jev: JevMessage = {
+    const jev: TranscriptMessage = {
       role: message.info?.role === "assistant" ? "assistant" : "user",
       text,
       toolUses,
@@ -133,7 +133,16 @@ export const FastJevV1: Plugin = async ({ client }) => {
           if (cfg.log) log("warn", "no Jev API key configured; leaving request untouched")
           return
         }
-        const result = await plan(toJevMessages(messages), cfg, makeAsker(cfg, apiKey))
+        const result = await plan(toTranscriptMessages(messages), cfg, makeAsker(cfg, apiKey))
+        if (result.blocked) {
+          if (cfg.log)
+            log(
+              "warn",
+              `keep-signal guard: Jev scored ${result.candidates} candidate(s) and kept none; request left untouched`,
+              { stage: result.stage },
+            )
+          return
+        }
         if (result.actions.size === 0) {
           if (cfg.log && result.candidates > 0)
             log("debug", "no stale tool calls to prune", { calls: result.calls })
@@ -154,6 +163,7 @@ export const FastJevV1: Plugin = async ({ client }) => {
             ...applied,
             requests: result.requests,
             stateTokens: result.stateTokens,
+            stage: result.stage,
           })
       } catch (error) {
         try {

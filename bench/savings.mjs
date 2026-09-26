@@ -1,9 +1,9 @@
-import { createServer } from "node:http"
+﻿import { createServer } from "node:http"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-
+import { estimateTokens } from "../src/engine/index.ts"
 
 const live = process.argv.includes("--live")
 const THRESHOLDS = [0.5, 0.3, 0.15]
@@ -246,9 +246,7 @@ function actions(messages) {
   return SOURCE.flatMap((m) => m.tools.map((t) => t.callID)).map((id) => {
     const part = seen.get(id)
     if (!part) return "drop_call"
-
-      ? "drop_result"
-      : "keep"
+    return (part.state.output ?? "").includes("fast-jev pruned") ? "drop_result" : "keep"
   })
 }
 

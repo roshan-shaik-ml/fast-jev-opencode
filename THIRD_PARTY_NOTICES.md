@@ -1,33 +1,27 @@
 # Third-party notices
 
+## Prior art
+
+This project implements **verbatim context pruning guided by Jev decisions** — the idea,
+and the shape of the problem, come from earlier work in this space. No code from those
+projects is copied, vendored, or depended on; the engine under `src/engine/` is our own
+implementation.
+
+We credit them because the approach is theirs to have invented, and because their
+published measurements are what made the approach worth implementing:
 
 
-This project is a port of, and depends on,
+  the original Claude Code implementation of the idea, MIT licensed.
 
-licensed under the MIT License. Portions of this project - including
-`truncatedResultText`, the state-fitting stages, the Jev questions, and the
-decision rules - are derived from that work.
+  documents as its distribution. It is worth knowing that this package publishes **no
+  `repository` field** and its publisher identity differs from the GitHub account the
+  project credits. We do not consume it; an earlier revision of this project did, and that
+  missing provenance link is a large part of why the engine is now ours.
+- [TypeSafe Jev](https://docs.typesafe.ai) — the decision model the whole approach rests on.
 
-```
-MIT License
+## Dependencies
 
-Copyright (c) 2025
+Runtime: `@opencode/plugin` (v2 entrypoint) only. The v1 entrypoint imports
+`@opencode-ai/plugin` for types, erased at runtime.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
+There is no third-party compaction engine. `src/engine/` is ours.

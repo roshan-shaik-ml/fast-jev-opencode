@@ -4,17 +4,19 @@ import { join } from "node:path"
 import {
   JevClient,
   batchCalls,
-  collectToolCalls,
-  decideCall,
-  fitState,
+  buildState,
+  collectCalls,
+  decide,
+  lacksKeepSignal,
   questionsFor,
-  resolveOptions,
   type CallAction,
   type CallAnswer,
+  type Decision,
   type JevAsker,
-  type JevQuestion,
-  type JevState,
-
+  type Thresholds,
+  type ToolCall,
+  type TranscriptMessage,
+} from "./engine/index.ts"
 
 export type Provider = "typesafe" | "zen" | "openrouter" | "custom"
 
@@ -27,12 +29,16 @@ export interface Config {
   apiKeyFile: string
   baseUrl: string
   model: string
-  keepThreshold: number
+  keepCallThreshold: number
+  keepResultThreshold: number
+  legacyKeepThreshold?: number
   preserveRecentMessages: number
   maxStateTokens: number
   maxRequestTokens: number
   truncateHeadChars: number
   minResultChars: number
+  peekChars: number
+  minScored: number
   protectTools: string[]
   rejudgeAfterMs: number
   timeoutMs: number
@@ -60,24 +66,25 @@ export const PRESETS: Record<
   },
 }
 
-const DEFAULTS: Omit<Config, "provider" | "apiKeyEnv" | "baseUrl" | "model"> & {
-  provider: Provider
-} = {
+const DEFAULTS = {
   enabled: true,
   dryRun: true,
-  provider: "typesafe",
+  provider: "typesafe" as Provider,
   apiKey: "",
   apiKeyEnv: "",
   apiKeyFile: "",
   baseUrl: "",
   model: "",
-  keepThreshold: 0.5,
+  keepCallThreshold: 0.5,
+  keepResultThreshold: 0.25,
   preserveRecentMessages: 6,
   maxStateTokens: 25000,
   maxRequestTokens: 30000,
   truncateHeadChars: 300,
   minResultChars: 2000,
-  protectTools: [],
+  peekChars: 200,
+  minScored: 8,
+  protectTools: [] as string[],
   rejudgeAfterMs: 600000,
   timeoutMs: 30000,
   log: true,
@@ -138,13 +145,16 @@ export function stripJsonComments(input: string): string {
   return out
 }
 
-function readConfigFile(): Partial<Config> {
+/** A config file may still carry the pre-split `keepThreshold` key. */
+type ConfigFile = Partial<Config> & { keepThreshold?: number }
+
+function readConfigFile(): ConfigFile {
   configIssues = []
   for (const path of CONFIG_CANDIDATES) {
     try {
       const raw = readFileSync(path, "utf8")
       const parsed = JSON.parse(stripJsonComments(raw))
-      if (parsed && typeof parsed === "object") return parsed as Partial<Config>
+      if (parsed && typeof parsed === "object") return parsed as ConfigFile
     } catch (error) {
       if ((error as { code?: string })?.code !== "ENOENT") {
         configIssues.push(error instanceof Error ? error.message : String(error))
@@ -198,6 +208,11 @@ export function loadConfig(): Config {
     configIssues.push(`unknown provider "${String(rawProvider)}"; using "${provider}"`)
   }
   const preset = provider === "custom" ? undefined : (PRESETS[provider] ?? PRESETS.typesafe)
+  const legacyValue = file.keepThreshold ?? file.legacyKeepThreshold
+  const legacy =
+    typeof legacyValue === "number" && Number.isFinite(legacyValue)
+      ? Math.min(1, Math.max(0, legacyValue))
+      : undefined
   return {
     enabled: pickBool(file.enabled, DEFAULTS.enabled),
     dryRun: pickBool(file.dryRun, DEFAULTS.dryRun),
@@ -207,7 +222,9 @@ export function loadConfig(): Config {
     apiKeyFile: pick(file.apiKeyFile, DEFAULTS.apiKeyFile),
     baseUrl: pick(file.baseUrl, preset?.baseUrl ?? ""),
     model: pick(file.model, preset?.model ?? ""),
-    keepThreshold: pickNum(file.keepThreshold, DEFAULTS.keepThreshold, 0, 1),
+    keepCallThreshold: pickNum(file.keepCallThreshold, DEFAULTS.keepCallThreshold, 0, 1),
+    keepResultThreshold: pickNum(file.keepResultThreshold, DEFAULTS.keepResultThreshold, 0, 1),
+    legacyKeepThreshold: legacy,
     preserveRecentMessages: pickNum(
       file.preserveRecentMessages,
       DEFAULTS.preserveRecentMessages,
@@ -218,6 +235,8 @@ export function loadConfig(): Config {
     maxRequestTokens: pickNum(file.maxRequestTokens, DEFAULTS.maxRequestTokens, 1, 1000000),
     truncateHeadChars: pickNum(file.truncateHeadChars, DEFAULTS.truncateHeadChars, 0, 1000000),
     minResultChars: pickNum(file.minResultChars, DEFAULTS.minResultChars, 0, 1000000),
+    peekChars: pickNum(file.peekChars, DEFAULTS.peekChars, 0, 4000),
+    minScored: pickNum(file.minScored, DEFAULTS.minScored, 0, 10000),
     protectTools: Array.isArray(file.protectTools)
       ? file.protectTools.filter((t) => typeof t === "string")
       : DEFAULTS.protectTools,
@@ -230,6 +249,13 @@ export function loadConfig(): Config {
     timeoutMs: pickNum(file.timeoutMs, DEFAULTS.timeoutMs, 1000, 300000),
     log: pickBool(file.log, DEFAULTS.log),
   }
+}
+
+export function resolveThresholds(cfg: Config): Thresholds {
+  if (cfg.legacyKeepThreshold !== undefined) {
+    return { keepCall: cfg.legacyKeepThreshold, keepResult: cfg.legacyKeepThreshold }
+  }
+  return { keepCall: cfg.keepCallThreshold, keepResult: cfg.keepResultThreshold }
 }
 
 export function resolveApiKey(cfg: Config): string {
@@ -252,40 +278,25 @@ export function makeAsker(cfg: Config, apiKey: string): JevAsker {
     apiKey,
     model: cfg.model || undefined,
     baseUrl: cfg.baseUrl || undefined,
-    fetch: (input, init) => {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), cfg.timeoutMs)
-      return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer))
-    },
+    timeoutMs: cfg.timeoutMs,
   })
 }
 
-export interface JevMessage {
-  role: "user" | "assistant"
-  text: string
-  toolUses: { tool_use_id: string; tool: string; input: Record<string, unknown> }[]
-  toolResults?: { tool_use_id: string; text: string; isError?: boolean }[]
-}
-
+/** The note left in place of a pruned result. Ours, not upstream's. */
 export function truncatedResultText(text: string, isError: boolean, headChars: number): string {
   if (text.length <= headChars + 120) return text
   const head = headChars > 0 ? `${text.slice(0, headChars)}\n` : ""
-
+  return `${head}[fast-jev pruned ${text.length - headChars} chars of this tool result${
     isError ? " (error)" : ""
   }; re-run the tool if needed]`
 }
 
-function noul(answers: Record<string, unknown>, name: string): number {
-  const answer = answers[name] as { noul?: unknown } | undefined
-  return answer && typeof answer.noul === "number" && Number.isFinite(answer.noul) ? answer.noul : 1
-}
-
-interface DecisionCacheEntry {
+interface CacheEntry {
   answer: CallAnswer
   at: number
 }
 
-const cache = new Map<string, DecisionCacheEntry>()
+const cache = new Map<string, CacheEntry>()
 
 function pruneCache(now: number, ttl: number): void {
   if (cache.size < 5000) return
@@ -295,22 +306,23 @@ function pruneCache(now: number, ttl: number): void {
 }
 
 export interface Plan {
+  decisions: Decision[]
   actions: Map<string, CallAction>
   calls: number
   candidates: number
   requests: number
   stateTokens: number
+  stage: string
+  blocked: boolean
 }
 
-export async function plan(jev: JevMessage[], cfg: Config, asker: JevAsker): Promise<Plan> {
-  const options = resolveOptions({
-    keepThreshold: cfg.keepThreshold,
-    preserveRecentMessages: cfg.preserveRecentMessages,
-    maxStateTokens: cfg.maxStateTokens,
-    maxRequestTokens: cfg.maxRequestTokens,
-    truncateHeadChars: cfg.truncateHeadChars,
-  })
-  const calls = collectToolCalls(jev, options.preserveRecentMessages)
+export async function plan(
+  transcript: TranscriptMessage[],
+  cfg: Config,
+  asker: JevAsker,
+): Promise<Plan> {
+  const thresholds = resolveThresholds(cfg)
+  const calls = collectCalls(transcript, cfg.preserveRecentMessages)
   const now = Date.now()
   pruneCache(now, cfg.rejudgeAfterMs)
 
@@ -325,28 +337,29 @@ export async function plan(jev: JevMessage[], cfg: Config, asker: JevAsker): Pro
       !call.pinned &&
       !protectedTool(call.tool) &&
       call.resultChars >= cfg.minResultChars &&
-      stale(call.tool_use_id),
+      stale(call.id),
   )
 
   let requests = 0
   let stateTokens = 0
+  let stage = ""
   if (needed.length > 0) {
-    const fitted = fitState(jev, calls, options)
+    const fitted = buildState(transcript, calls, {
+      maxStateTokens: cfg.maxStateTokens,
+      preserveRecentMessages: cfg.preserveRecentMessages,
+      peekChars: cfg.peekChars,
+    })
     stateTokens = fitted.tokens
-    const batches = batchCalls(needed, fitted.tokens, options)
-    for (const batch of batches) {
-      const questions = Object.assign({}, ...batch.map((call) => questionsFor(call))) as Record<
-        string,
-        JevQuestion
-      >
-      const response = await asker.ask(fitted.state as JevState, questions)
+    stage = fitted.stage
+    for (const batch of batchCalls(needed, fitted.tokens, cfg.maxRequestTokens)) {
+      const questions = Object.assign({}, ...batch.map((call) => questionsFor(call)))
+      const answers = await asker.ask(fitted.state, questions)
       requests += 1
-      const answers = (response.answers ?? {}) as Record<string, unknown>
       for (const call of batch) {
-        cache.set(call.tool_use_id, {
+        cache.set(call.id, {
           answer: {
-            keepCall: noul(answers, `call_${call.id}`),
-            keepResult: noul(answers, `result_${call.id}`),
+            keepCall: answers[`call_${call.slot}`] ?? 1,
+            keepResult: answers[`result_${call.slot}`] ?? 1,
           },
           at: now,
         })
@@ -354,17 +367,35 @@ export async function plan(jev: JevMessage[], cfg: Config, asker: JevAsker): Pro
     }
   }
 
+  const decisions = calls.map((call: ToolCall) => {
+    const answer = cache.get(call.id)?.answer ?? { keepCall: 1, keepResult: 1 }
+    return decide(call, answer, thresholds)
+  })
+
+  const blocked = cfg.minScored > 0 && lacksKeepSignal(decisions, cfg.minScored)
+
   const actions = new Map<string, CallAction>()
-  for (const call of calls) {
-    if (call.pinned || protectedTool(call.tool)) continue
-    if (call.resultChars < cfg.minResultChars) continue
-    const entry = cache.get(call.tool_use_id)
-    if (!entry) continue
-    const decision = decideCall(call, entry.answer, options)
-    if (decision.action !== "keep") actions.set(call.tool_use_id, decision.action)
+  if (!blocked) {
+    const byId = new Map(calls.map((call) => [call.id, call]))
+    for (const decision of decisions) {
+      if (decision.action === "keep") continue
+      const call = byId.get(decision.id)
+      if (!call) continue
+      if (call.pinned || protectedTool(call.tool) || call.resultChars < cfg.minResultChars) continue
+      actions.set(decision.id, decision.action)
+    }
   }
 
-  return { actions, calls: calls.length, candidates: needed.length, requests, stateTokens }
+  return {
+    decisions,
+    actions,
+    calls: calls.length,
+    candidates: needed.length,
+    requests,
+    stateTokens,
+    stage,
+    blocked,
+  }
 }
 
-export type { CallAction }
+export type { CallAction, Decision, ToolCall, TranscriptMessage }

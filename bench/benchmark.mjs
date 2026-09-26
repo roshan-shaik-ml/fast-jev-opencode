@@ -1,48 +1,36 @@
-import { createServer } from "node:http"
+﻿import { createServer } from "node:http"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
+import { collectCalls, decide } from "../src/engine/index.ts"
 
-
-const live = process.argv.includes("--live")
 const PRESERVE = 6
-const THRESHOLD = 0.5
-const HEAD_CHARS = 300
+const THRESHOLDS = { keepCall: 0.5, keepResult: 0.25 }
 
+// Stub Jev: one third truncated, one third kept, one third removed.
 function probability(name) {
-  const n = Number(name.match(/_t(\d+)$/)?.[1] ?? "1")
-  const isCall = name.startsWith("call_")
-  if (isCall) return n % 3 === 2 ? 0.2 : 0.9
-  return n % 3 === 1 ? 0.2 : 0.9
-}
-
-function answersFor(questions) {
-  const answers = {}
-  for (const [name, question] of Object.entries(questions ?? {})) {
-    if (question.type !== "noul") continue
-    answers[name] = { noul: live ? 1 : probability(name) }
-  }
-  return answers
+  const slot = Number(name.match(/_(\d+)$/)?.[1] ?? "1")
+  return name.startsWith("call_") ? (slot % 3 === 2 ? 0.2 : 0.9) : slot % 3 === 1 ? 0.2 : 0.9
 }
 
 let requestCount = 0
-const mock = createServer((req, res) => {
+const server = createServer((req, res) => {
   let body = ""
   req.on("data", (chunk) => (body += chunk))
   req.on("end", () => {
     requestCount += 1
     const parsed = JSON.parse(body)
+    const answers = {}
+    for (const [name, question] of Object.entries(parsed.questions ?? {})) {
+      if (question.type === "noul") answers[name] = { noul: probability(name) }
+    }
     res.writeHead(200, { "content-type": "application/json" })
-    res.end(JSON.stringify({ answers: answersFor(parsed.questions) }))
+    res.end(JSON.stringify({ answers }))
   })
 })
-
-let baseUrl
-if (!live) {
-  await new Promise((resolve) => mock.listen(0, "127.0.0.1", resolve))
-  baseUrl = `http://127.0.0.1:${mock.address().port}`
-}
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+const port = server.address().port
 
 function spec() {
   const messages = [
@@ -53,19 +41,14 @@ function spec() {
     },
   ]
   for (let i = 0; i < 24; i++) {
-    const tool = ["read", "bash", "grep", "edit"][i % 4]
     messages.push({
       role: "assistant",
       text: "",
       tools: [
         {
           callID: `c${i + 1}`,
-          tool,
-          input: {
-            path: `src/file${i}.ts`,
-            pattern: "needle",
-            command: `rg needle src/file${i}.ts`,
-          },
+          tool: ["read", "bash", "grep", "edit"][i % 4],
+          input: { path: `src/file${i}.ts`, pattern: "needle" },
           output: `result for call ${i + 1}\n${"x".repeat(4000)}`,
         },
       ],
@@ -77,44 +60,55 @@ function spec() {
   return messages
 }
 
-function claudeMessages(messages) {
-  return messages.map((m) => {
-    const message = { role: m.role, text: m.text, toolUses: [] }
-    if (m.tools.length > 0) {
-      message.toolUses = m.tools.map((t) => ({
-        tool_use_id: t.callID,
-        tool: t.tool,
-        input: t.input,
-      }))
-      message.toolResults = m.tools.map((t) => ({
-        tool_use_id: t.callID,
-        text: t.output,
-        isError: false,
-      }))
+function toTranscript(messages) {
+  return messages.map((message) => {
+    if (message.tools.length === 0) {
+      return { role: message.role, text: message.text, toolUses: [] }
     }
-    return message
+    return {
+      role: message.role,
+      text: message.text,
+      toolUses: message.tools.map((tool) => ({
+        id: tool.callID,
+        name: tool.tool,
+        input: tool.input,
+      })),
+      toolResults: message.tools.map((tool) => ({
+        id: tool.callID,
+        text: tool.output,
+        isError: false,
+      })),
+    }
   })
 }
 
-function opencodeMessages(messages) {
-  return messages.map((m) => ({
-    info: { id: `m${Math.random()}`, sessionID: "s", role: m.role },
+function toV1Messages(messages) {
+  return messages.map((message) => ({
+    info: { id: `m${Math.random()}`, sessionID: "s", role: message.role },
     parts: [
-      ...(m.text
-        ? [{ id: `t${Math.random()}`, sessionID: "s", messageID: "m", type: "text", text: m.text }]
+      ...(message.text
+        ? [
+            {
+              id: `t${Math.random()}`,
+              sessionID: "s",
+              messageID: "m",
+              type: "text",
+              text: message.text,
+            },
+          ]
         : []),
-      ...m.tools.map((t) => ({
-        id: `${t.callID}-p`,
+      ...message.tools.map((tool) => ({
+        id: `${tool.callID}-p`,
         sessionID: "s",
         messageID: "m",
         type: "tool",
-        callID: t.callID,
-        tool: t.tool,
+        callID: tool.callID,
+        tool: tool.tool,
         state: {
           status: "completed",
-          input: t.input,
-          output: t.output,
-          title: t.tool,
+          input: tool.input,
+          output: tool.output,
+          title: tool.tool,
           metadata: {},
           time: { start: 1, end: 2 },
         },
@@ -123,166 +117,122 @@ function opencodeMessages(messages) {
   }))
 }
 
-function claudeChars(messages) {
+function v1Chars(messages) {
   let total = 0
-  for (const m of messages) {
-    total += m.text.length
-    for (const t of m.toolUses) total += JSON.stringify(t.input).length
-    for (const r of m.toolResults ?? []) total += r.text.length
-  }
-  return total
-}
-
-function opencodeChars(messages) {
-  let total = 0
-  for (const m of messages) {
-    for (const p of m.parts) {
-      if (p.type === "text") total += p.text.length
-      else if (p.type === "tool") {
-        total += JSON.stringify(p.state.input ?? {}).length
-        total += (p.state.output ?? p.state.error ?? "").length
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "text") total += part.text.length
+      else if (part.type === "tool") {
+        total += JSON.stringify(part.state.input ?? {}).length
+        total += (part.state.output ?? part.state.error ?? "").length
       }
     }
   }
   return total
 }
 
-function actionCounts(actions) {
-  return {
-    keep: actions.filter((a) => a === "keep").length,
-    drop_result: actions.filter((a) => a === "drop_result").length,
-    drop_call: actions.filter((a) => a === "drop_call").length,
-  }
-}
-
-const pct = (before, after) => (((before - after) / before) * 100).toFixed(1)
+const actionCounts = (list) => ({
+  keep: list.filter((a) => a === "keep").length,
+  drop_result: list.filter((a) => a === "drop_result").length,
+  drop_call: list.filter((a) => a === "drop_call").length,
+})
 
 const source = spec()
-const claude = claudeMessages(source)
-const opencode = opencodeMessages(source)
+const transcript = toTranscript(source)
+const calls = collectCalls(transcript, PRESERVE)
 
-console.log(`\nmode: ${live ? "live (real TypeSafe endpoint)" : "offline (mock endpoint)"}`)
-console.log(`transcript: ${source.length} messages, 24 tool calls, ${claudeChars(claude)} chars\n`)
+console.log("\nmode: offline (stubbed Jev answers)")
+console.log(`transcript: ${source.length} messages, ${calls.length} tool calls\n`)
 
-console.log("Claude Code path  (library compact(), the upstream port's engine)")
-const tA = Date.now()
-const result = await compact(
-  claude,
-  { ask: async (_state, questions) => ({ answers: answersFor(questions) }) },
-  {
-    preserveRecentMessages: PRESERVE,
-    keepThreshold: THRESHOLD,
-    truncateHeadChars: HEAD_CHARS,
-  },
-)
-const msA = Date.now() - tA
-const actionsA = result.decisions.filter((d) => d.reason !== "pinned").map((d) => d.action)
-console.log(`  calls judged   ${result.decisions.length}`)
-console.log(`  actions        ${JSON.stringify(actionCounts(actionsA))}`)
-console.log(
-  `  chars          ${result.stats.charsBefore} -> ${result.stats.charsAfter} (-${pct(result.stats.charsBefore, result.stats.charsAfter)}%)`,
-)
-console.log(`  messages       ${result.stats.messagesBefore} -> ${result.stats.messagesAfter}`)
-console.log(`  jev requests   ${result.stats.requests}`)
-console.log(`  time           ${msA} ms\n`)
+console.log("engine reference  (collectCalls -> decide)")
+const actionsA = calls
+  .filter((call) => !call.pinned)
+  .map((call) =>
+    decide(
+      call,
+      {
+        keepCall: probability(`call_${call.slot}`),
+        keepResult: probability(`result_${call.slot}`),
+      },
+      THRESHOLDS,
+    ),
+  )
+  .map((decision) => decision.action)
+console.log(`  actions        ${JSON.stringify(actionCounts(actionsA))}\n`)
 
 const home = mkdtempSync(join(tmpdir(), "fast-jev-bench-"))
 const cfgPath = join(home, "fast-jev.json")
-const envPath = join(home, ".env")
 process.env.FAST_JEV_CONFIG = cfgPath
-process.env.FAST_JEV_ENV = envPath
+process.env.FAST_JEV_ENV = join(home, ".env")
+process.env.TYPESAFE_API_KEY = "bench-offline-key"
+writeFileSync(
+  cfgPath,
+  JSON.stringify({
+    enabled: true,
+    dryRun: false,
+    provider: "custom",
+    baseUrl: `http://127.0.0.1:${port}`,
+    apiKeyEnv: "TYPESAFE_API_KEY",
+    preserveRecentMessages: PRESERVE,
+    minResultChars: 0,
+    rejudgeAfterMs: 600000,
+    timeoutMs: 30000,
+    minScored: 1000,
+    log: false,
+  }),
+)
 
-const baseCfg = {
-  enabled: true,
-  dryRun: false,
-  provider: "custom",
-  baseUrl: baseUrl ?? "https://api.typesafe.ai/v1/systemone",
-  apiKeyEnv: "TYPESAFE_API_KEY",
-  preserveRecentMessages: PRESERVE,
-  keepThreshold: THRESHOLD,
-  truncateHeadChars: HEAD_CHARS,
-  minResultChars: 0,
-  rejudgeAfterMs: 600000,
-  timeoutMs: 60000,
-  log: false,
-}
-const writeCfg = (overrides = {}) =>
-  writeFileSync(cfgPath, JSON.stringify({ ...baseCfg, ...overrides }))
-writeCfg()
-
-if (live) {
-  const key = process.env.TYPESAFE_API_KEY
-  if (!key) {
-    console.error("--live requires TYPESAFE_API_KEY in the environment")
-    process.exitCode = 1
-    process.exit()
-  }
-  writeFileSync(envPath, `TYPESAFE_API_KEY=${key}\n`)
-} else {
-  process.env.TYPESAFE_API_KEY = "bench-offline-key"
-}
-
-const pluginPath = pathToFileURL(join(process.cwd(), "src", "v1.ts")).href
-const { default: plugin } = await import(pluginPath)
-const hooks = await plugin({
-  client: { app: { log: async () => {} } },
-  directory: home,
-  worktree: home,
-})
+const { default: plugin } = await import(pathToFileURL(join(process.cwd(), "src", "v1.ts")).href)
+const hooks = await plugin({ client: { app: { log: async () => {} } } })
 const transform = hooks["experimental.chat.messages.transform"]
 
-const beforeChars = opencodeChars(opencode)
-const callIDs = source.flatMap((m) => m.tools.map((t) => t.callID))
+const messages = toV1Messages(source)
+const beforeChars = v1Chars(messages)
+const callIDs = source.flatMap((message) => message.tools.map((tool) => tool.callID))
 requestCount = 0
-const tB = Date.now()
-await transform({}, { messages: opencode })
-const msB = Date.now() - tB
-const afterChars = opencodeChars(opencode)
+const started = Date.now()
+await transform({}, { messages })
+const elapsed = Date.now() - started
+const afterChars = v1Chars(messages)
 
 const seen = new Map()
-for (const m of opencode) for (const p of m.parts) if (p.type === "tool") seen.set(p.callID, p)
+for (const message of messages) {
+  for (const part of message.parts) if (part.type === "tool") seen.set(part.callID, part)
+}
 const actionsB = callIDs.map((id) => {
   const part = seen.get(id)
   if (!part) return "drop_call"
-
-    ? "drop_result"
-    : "keep"
+  return (part.state.output ?? "").includes("fast-jev pruned") ? "drop_result" : "keep"
 })
-const requestsB = requestCount
 
-console.log("OpenCode v1 path  (experimental.chat.messages.transform)")
-console.log(`  calls judged   ${actionsB.length}`)
-console.log(`  actions        ${JSON.stringify(actionCounts(actionsB))}`)
-console.log(`  chars          ${beforeChars} -> ${afterChars} (-${pct(beforeChars, afterChars)}%)`)
-console.log(`  messages       ${source.length} -> ${opencode.length}`)
-console.log(`  jev requests   ${requestsB}`)
-console.log(`  time           ${msB} ms\n`)
+console.log("adapter          (v1 hook, same stub answers)")
+console.log(
+  `  actions        ${JSON.stringify(actionCounts(actionsB.filter((a) => a !== "keep" || true)))}`,
+)
+console.log(`  chars          ${beforeChars} -> ${afterChars}`)
+console.log(`  jev requests   ${requestCount}`)
+console.log(`  time           ${elapsed} ms\n`)
 
 const parity = JSON.stringify(actionsA) === JSON.stringify(actionsB)
-console.log(`parity          actions identical: ${parity} (${actionsA.length}/${actionsB.length})`)
-console.log(`                chars after identical: ${result.stats.charsAfter === afterChars}`)
-console.log(
-  `                message count identical: ${result.stats.messagesAfter === opencode.length}`,
-)
+console.log(`consistency      actions identical: ${parity} (${actionsA.length}/${actionsB.length})`)
 
-const cached = opencodeMessages(source)
+const cached = toV1Messages(source)
 requestCount = 0
-const tC = Date.now()
+const cachedStart = Date.now()
 await transform({}, { messages: cached })
-const msC = Date.now() - tC
-console.log(`cache           second request: ${requestCount} jev request(s), ${msC} ms`)
-
-writeCfg({ minResultChars: 100000000 })
-const idle = opencodeMessages(source)
-const tD = Date.now()
-await transform({}, { messages: idle })
-const msD = Date.now() - tD
-console.log(`overhead        no eligible calls: ${msD} ms (mapping only, no Jev call)\n`)
-
-if (!live) await new Promise((resolve) => mock.close(resolve))
-rmSync(home, { recursive: true, force: true })
-
 console.log(
-  parity ? "RESULT: parity with the Claude Code port\n" : "RESULT: DIVERGENCE - investigate\n",
+  `cache            second request: ${requestCount} jev request(s), ${Date.now() - cachedStart} ms`,
 )
+
+writeFileSync(cfgPath, JSON.stringify({ enabled: true, minResultChars: 100000000, log: false }))
+const idle = toV1Messages(source)
+const idleStart = Date.now()
+await transform({}, { messages: idle })
+console.log(
+  `overhead         no eligible calls: ${Date.now() - idleStart} ms (mapping only, no Jev call)\n`,
+)
+
+await new Promise((resolve) => server.close(resolve))
+rmSync(home, { recursive: true, force: true })
+console.log(parity ? "RESULT: adapter matches the engine\n" : "RESULT: DIVERGENCE - investigate\n")
 process.exitCode = parity ? 0 : 1

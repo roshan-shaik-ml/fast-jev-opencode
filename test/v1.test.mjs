@@ -1,4 +1,4 @@
-import { createServer } from "node:http"
+﻿import { createServer } from "node:http"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -157,7 +157,7 @@ const tools = truncated.flatMap((m) => m.parts).filter((p) => p.type === "tool")
 check("drop_result: tool parts kept", tools.length === 3, `got ${tools.length}`)
 check(
   "drop_result: outputs truncated with note",
-
+  tools.every((p) => p.state.output.includes("fast-jev pruned")),
 )
 check(
   "drop_result: head preserved",
@@ -179,8 +179,7 @@ const errTool = errMessages
   .find((p) => p.type === "tool" && p.callID === "err-1")
 check(
   "error result: truncated with (error) note",
-
-    errTool.state.error.includes("(error)"),
+  errTool.state.error.includes("fast-jev pruned") && errTool.state.error.includes("(error)"),
 )
 
 console.log("\n[cache]")
@@ -307,8 +306,29 @@ check("unfittable history: fail-open untouched", JSON.stringify(huge) === hugeBe
 check("unfittable history: no request sent", requestCount === 0, `got ${requestCount}`)
 writeCfg()
 
+console.log("\n[keep-signal guard]")
+writeCfg()
+answerer = () => 0
+const guarded = (() => {
+  const messages = fixture("guard")
+  for (let i = 0; i < 6; i++)
+    messages.push(message("assistant", [tool(`guard-${i + 4}`, "read", BIG)]))
+  messages.push(
+    message("user", [text("tail")]),
+    message("assistant", [text("tail")]),
+    message("user", [text("tail")]),
+    message("assistant", [text("tail")]),
+    message("user", [text("tail")]),
+    message("assistant", [text("tail")]),
+  )
+  return messages
+})()
+const guardedBefore = JSON.stringify(guarded)
+await transform({}, { messages: guarded })
+check("guard: nothing pruned when no call is kept", JSON.stringify(guarded) === guardedBefore)
+
 console.log("\n[multi-batch]")
-writeCfg({ maxStateTokens: 3000, maxRequestTokens: 3600 })
+writeCfg({ maxStateTokens: 3000, maxRequestTokens: 3600, minScored: 1000 })
 answerer = () => 0
 requestCount = 0
 const many = [message("user", [text("task")])]

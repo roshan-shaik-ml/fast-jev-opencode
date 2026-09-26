@@ -10,7 +10,9 @@ that stays is kept word for word.
 One package, two adapters. The v2 adapter uses `ctx.session.hook("context", ...)`; the v1
 adapter uses the legacy `experimental.chat.messages.transform` hook. The upstream
 
-Claude Code; this project reuses its engine and ports the decision loop to OpenCode.
+Claude Code and invented the approach. This project is an independent implementation of the
+same idea: the engine under `src/engine/` is our own code, with no dependency on that
+package — see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for why.
 
 ## Compatibility
 
@@ -58,6 +60,12 @@ A candidate is a tool call that is not pinned (first message / newest
   config leaves the request untouched.
 - **Cached:** decisions are cached per tool call id, so the same call is not re-scored on every
   request (`rejudgeAfterMs`).
+- **Redacted:** tool inputs lose credential-named fields and secret-shaped strings before
+  anything is sent to the Jev endpoint.
+- **Informed:** each result reaches Jev as a size plus a head/tail excerpt (`peekChars`), so the
+  judgement is made on what the output contained rather than on a byte count.
+- **Guarded:** a pass that scored `minScored` calls and kept none is refused outright — a
+  blanket removal is a bad answer, not a decision, and the request goes out untouched.
 
 ## Install
 
@@ -177,12 +185,16 @@ restart. The shipped example is observe-only (`dryRun: true`).
 | `apiKey`                 | `""`       | Inline key (prefer `apiKeyEnv`)                              |
 | `apiKeyEnv`              | preset     | Environment variable holding the key                         |
 | `apiKeyFile`             | `""`       | File containing the key                                      |
-| `keepThreshold`          | `0.5`      | Minimum probability for a call or result to stay             |
+| `keepCallThreshold`      | `0.5`      | Minimum probability for the call itself to stay              |
+| `keepResultThreshold`    | `0.25`     | Minimum probability for its output to stay verbatim          |
+| `keepThreshold`          | _unset_    | Legacy override: sets both thresholds to one value           |
 | `preserveRecentMessages` | `6`        | Newest messages never judged                                 |
 | `maxStateTokens`         | `25000`    | State token ceiling                                          |
 | `maxRequestTokens`       | `30000`    | State plus one batch of questions                            |
 | `truncateHeadChars`      | `300`      | Head kept when a result is truncated                         |
 | `minResultChars`         | `2000`     | Results below this are never candidates                      |
+| `peekChars`              | `200`      | Head/tail excerpt of each result shown to Jev                |
+| `minScored`              | `8`        | Refuse a pass that scored this many calls and kept none      |
 | `protectTools`           | `[]`       | Tool names whose calls/results are always kept               |
 | `rejudgeAfterMs`         | `600000`   | Re-score a call after this long; `0` re-scores every request |
 | `timeoutMs`              | `30000`    | Per-request deadline; a stalled endpoint fails open          |
@@ -205,49 +217,51 @@ Two scripts, both runnable without a key (they stub Jev). Add `-- --live` and se
 `TYPESAFE_API_KEY` to score against the real endpoint.
 
 ```sh
-npm run bench          # parity against the upstream Claude Code engine
+npm run bench          # engine <-> adapter consistency
 npm run bench:savings  # token savings, with and without Jev
 ```
 
-### Parity with the Claude Code port
+### Engine and adapter agree
 
-
-and to the adapter, with an identical set of Jev answers:
+Drives the engine's decision path and the adapter over the same transcript with the same
+stubbed Jev answers:
 
 ```
-transcript: 31 messages, 24 tool calls, 98478 chars
-parity      actions identical: true (24/24)
-            chars after identical: true
-            message count identical: true
-cache       second request: 0 jev request(s)
-overhead    no eligible calls: 1 ms (mapping only, no Jev call)
+transcript: 31 messages, 24 tool calls
+engine     actions {"keep":16,"drop_result":8,"drop_call":0}
+adapter    actions {"keep":16,"drop_result":8,"drop_call":0}
+           chars 97624 -> 68483
+consistency  actions identical: true (24/24)
+cache        second request: 0 jev request(s)
+overhead     no eligible calls: 1 ms (mapping only, no Jev call)
 ```
 
-Same decisions and same reduction as the Claude Code port; the adapter adds milliseconds.
+The adapter adds milliseconds and no decisions of its own.
 
 ### Token savings, with and without Jev
 
 Replays a small realistic task - fix a failing `/login` test - and measures the tokens in the
-outgoing request before and after pruning.
+outgoing request before and after pruning. Offline the answers are stubbed; `-- --live` scores
+them against the real endpoint.
 
 ```
 transcript     14 messages, 6 tool calls
-without Jev    1358 tokens
+without Jev    1610 tokens
 
-with Jev, by keepThreshold:
+by keepThreshold (legacy single-knob mode):
   threshold   tokens   saved     actions
-  0.50           71    - 94.8%   keep=0 drop_result=0 drop_call=6
-  0.30          476    - 64.9%   keep=2 drop_result=1 drop_call=3
-  0.15          891    - 34.4%   keep=4 drop_result=2 drop_call=0
+  0.50          941    - 41.6%   keep=3 drop_result=3 drop_call=0
+  0.15         1610    -  0.0%   keep=6 drop_result=0 drop_call=0
 ```
 
-Example run against the live TypeSafe endpoint. Three threshold passes cost **one** Jev
-request: decisions are cached and re-decided locally when the threshold changes.
+With the shipped defaults (`keepCallThreshold` 0.5 / `keepResultThreshold` 0.25) the same
+transcript keeps every call and truncates the three bulky outputs: the edit and the passing
+test run survive, which is the point of splitting the thresholds. An earlier single-threshold
+default of 0.5 removed all six calls on this transcript - including the edit - which is what
+prompted the split.
 
-`keepThreshold` trades savings against recall. At the upstream default of `0.5` this
-transcript loses everything, including the edit and the passing test run; at `0.15` every call
-is kept and only two bulky results are truncated. Tune it against your own traffic, starting
-low.
+Three passes cost **one** Jev request: decisions are cached and re-decided locally when a
+threshold changes.
 
 Tokens are estimated with the same estimator the plugin uses to plan requests, not
 provider-billed tokens.
@@ -266,7 +280,9 @@ npm run format:check
 
 ## Credits
 
+- Prior art: the approach was invented in
 
+  This project is an independent implementation and shares no code with it.
 - Decisions: [TypeSafe Jev](https://docs.typesafe.ai)
 
 See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for the upstream license notice.
