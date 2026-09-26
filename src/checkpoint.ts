@@ -39,15 +39,14 @@ export function renderCheckpoint(
     for (const call of byMessage.get(index) ?? []) {
       const input = redactText(clip(JSON.stringify(call.input), 400))
       const outcome = call.isError ? "error" : "ok"
-      if (call.resultChars > options.truncateHeadChars + 120) {
-        const head = call.resultText.slice(0, options.truncateHeadChars).replace(/\s+/g, " ")
+      const safe = redactText(call.resultText)
+      if (safe.length > options.truncateHeadChars + 120) {
+        const head = safe.slice(0, options.truncateHeadChars).replace(/\s+/g, " ")
         out.push(
-          `${message.role}: [tool ${call.tool} ${input} -> ${outcome} ${call.resultChars}ch, head kept] ${redactText(head)}`,
+          `${message.role}: [tool ${call.tool} ${input} -> ${outcome} ${call.resultChars}ch, head kept] ${head}`,
         )
       } else {
-        out.push(
-          `${message.role}: [tool ${call.tool} ${input} -> ${outcome}] ${redactText(call.resultText)}`,
-        )
+        out.push(`${message.role}: [tool ${call.tool} ${input} -> ${outcome}] ${safe}`)
       }
     }
   })

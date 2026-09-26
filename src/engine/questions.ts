@@ -19,8 +19,11 @@ function collapse(text: string): string {
  */
 export function outputPreview(call: ToolCall, chars: number): string {
   if (chars <= 0 || call.resultChars <= chars * 2 + 16) return ""
-  const head = collapse(redactText(call.resultText.slice(0, chars)))
-  const tail = collapse(redactText(call.resultText.slice(-chars)))
+  // Redact first, then slice. Slicing first can cut a credential in half and
+  // leave a fragment that no longer matches a secret pattern.
+  const safe = redactText(call.resultText)
+  const head = collapse(safe.slice(0, chars))
+  const tail = collapse(safe.slice(-chars))
   return `\nOutput preview: ${head} … ${tail}`
 }
 

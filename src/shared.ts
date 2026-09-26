@@ -382,7 +382,12 @@ function answerFrom(
   style: QuestionStyle,
 ): CallAnswer {
   if (style === "choice") {
-    const probabilities = answers[`decision_${slot}`]?.probabilities ?? {}
+    const probabilities = answers[`decision_${slot}`]?.probabilities
+    // An answer without probabilities is a missing answer, not a "drop". The
+    // client's contract says a partial answer must never become a deletion.
+    if (!probabilities || Object.keys(probabilities).length === 0) {
+      return { keepCall: 1, keepResult: 1 }
+    }
     const keep = typeof probabilities.keep === "number" ? probabilities.keep : 0
     const truncate = typeof probabilities.truncate === "number" ? probabilities.truncate : 0
     return { keepCall: keep + truncate, keepResult: keep }
@@ -529,7 +534,20 @@ export async function plan(
     actions.set(decision.id, decision.action)
   }
 
-  const keepSignalBlocked = cfg.minScored > 0 && lacksKeepSignal(decisions, cfg.minScored)
+  // Only calls that were actually judged may feed the guard. Calls that were
+  // never scored (below the size floor, protected, rule-hit, cached) default to
+  // "keep", and one of those would mask a blanket removal of every scored call.
+  const judged = decisions.filter((decision) => {
+    const call = byId.get(decision.id)
+    return (
+      call !== undefined &&
+      !call.pinned &&
+      !protectedTool(call.tool) &&
+      call.resultChars >= cfg.minResultChars &&
+      !ruleHits.has(call.id)
+    )
+  })
+  const keepSignalBlocked = cfg.minScored > 0 && lacksKeepSignal(judged, cfg.minScored)
 
   // A prune rewrites the prefix, so the provider re-reads the suffix at full
   // price while the removed tokens were only worth the cached-read price. When

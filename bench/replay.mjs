@@ -1,7 +1,7 @@
 ﻿import { DatabaseSync } from "node:sqlite"
 import { createServer } from "node:http"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { collectCalls, prefilter } from "../src/engine/index.ts"
@@ -12,7 +12,7 @@ const argOf = (name) => {
   const index = args.indexOf(name)
   return index === -1 ? undefined : args[index + 1]
 }
-const DB = "C:/Users/Shaik faizan/.local/share/opencode/opencode.db"
+const DB = process.env.OPENCODE_DB ?? join(homedir(), ".local/share/opencode/opencode.db")
 const PRESERVE = 6
 const MAX_MESSAGES = Number(argOf("--messages") ?? 400)
 const HOW_MANY = Number(argOf("--all") ?? 1)

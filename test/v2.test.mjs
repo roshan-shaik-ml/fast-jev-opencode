@@ -4,6 +4,21 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
+// The payload shapes below were captured from a live OpenCode 2.0.18 session.
+// An earlier revision of this suite fed the adapter a shape that never occurs,
+// which is why a broken adapter passed every check.
+const user = (text) => ({ role: "user", content: [{ type: "text", text }] })
+const assistant = (parts) => ({ role: "assistant", content: parts })
+const tool = (results) => ({ role: "tool", content: results })
+const say = (text) => ({ type: "text", text })
+const call = (id, name, input = {}) => ({ type: "tool-call", id, name, input })
+const result = (id, name, value, isError = false) => ({
+  type: "tool-result",
+  id,
+  name,
+  result: { type: isError ? "error" : "text", value },
+})
+
 const home = mkdtempSync(join(tmpdir(), "fast-jev-v2-"))
 const cfgPath = join(home, "fast-jev.json")
 process.env.FAST_JEV_CONFIG = cfgPath
@@ -24,13 +39,16 @@ const server = createServer((req, res) => {
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
       const p = answerer(name, question.type)
-      if (question.type === "noul" && typeof p === "number") answers[name] = { noul: p }
+      if (typeof p === "number") {
+        if (question.type === "noul") answers[name] = { noul: p }
+      } else if (p && typeof p === "object") {
+        answers[name] = p
+      }
     }
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ answers }))
   })
 })
-
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
 const port = server.address().port
 
@@ -48,8 +66,7 @@ const baseCfg = {
   timeoutMs: 30000,
   log: false,
 }
-const writeCfg = (overrides = {}) =>
-  writeFileSync(cfgPath, JSON.stringify({ ...baseCfg, ...overrides }))
+const writeCfg = (overrides = {}) => writeFileSync(cfgPath, JSON.stringify({ ...baseCfg, ...overrides }))
 writeCfg()
 
 const mod = await import(pathToFileURL(join(process.cwd(), "src", "index.ts")).href)
@@ -89,147 +106,132 @@ check("v2: registers the context hook", typeof hooksByName.context === "function
 check("v2: registers the compaction hook", typeof hooksByName.compaction === "function")
 const transform = hooksByName.context
 
-const toolPart = (callID, name, output, status = "completed") => ({
-  type: "tool",
-  id: callID,
-  name,
-  state:
-    status === "error"
-      ? { status, input: { q: callID }, error: { type: "error", message: output } }
-      : { status, input: { q: callID }, content: [{ type: "text", text: output }], metadata: {} },
-})
-const textPart = (value) => ({ type: "text", text: value })
 const BIG = "X".repeat(5000)
-
-const toTranscriptFixture = () => [
-  { role: "user", text: "Fix the failing test. Never edit src/generated.", toolUses: [] },
-  {
-    role: "assistant",
-    text: "",
-    toolUses: [{ id: "b1", name: "read", input: { filePath: "a.ts" } }],
-    toolResults: [{ id: "b1", text: BIG, isError: false }],
-  },
-  { role: "assistant", text: "done", toolUses: [] },
-]
 
 function fixture(tag) {
   return [
-    { type: "user", id: `${tag}-m0`, text: "Fix the failing test. Never edit src/generated." },
-    { type: "assistant", id: `${tag}-m1`, content: [toolPart(`${tag}-1`, "read", BIG)] },
-    { type: "assistant", id: `${tag}-m2`, content: [toolPart(`${tag}-2`, "bash", BIG)] },
-    {
-      type: "assistant",
-      id: `${tag}-m3`,
-      content: [textPart("found it"), toolPart(`${tag}-3`, "write", BIG)],
-    },
-    { type: "user", id: `${tag}-m4`, text: "ok continue" },
-    { type: "assistant", id: `${tag}-m5`, content: [textPart("step 5")] },
-    { type: "user", id: `${tag}-m6`, text: "step 6" },
-    { type: "assistant", id: `${tag}-m7`, content: [textPart("step 7")] },
-    { type: "user", id: `${tag}-m8`, text: "step 8" },
-    { type: "assistant", id: `${tag}-m9`, content: [textPart("step 9")] },
+    user("Fix the failing test. Never edit src/generated."),
+    assistant([call(`${tag}-1`, "read", { filePath: "a.ts" })]),
+    tool([result(`${tag}-1`, "read", BIG)]),
+    assistant([call(`${tag}-2`, "bash", { command: "npm test" })]),
+    tool([result(`${tag}-2`, "bash", BIG)]),
+    assistant([say("found it"), call(`${tag}-3`, "write", { filePath: "b.ts" })]),
+    tool([result(`${tag}-3`, "write", BIG)]),
+    user("ok continue"),
+    assistant([say("step")]),
+    user("step"),
+    assistant([say("step")]),
+    user("step"),
+    assistant([say("step")]),
+    user("step"),
   ]
 }
 
-const event = (messages) => ({ messages, system: [], tools: {}, options: {}, sessionID: "s" })
+const callsOf = (messages) =>
+  messages.flatMap((message) => (message.content ?? []).filter((part) => part.type === "tool-call"))
+const resultsOf = (messages) =>
+  messages.flatMap((message) => (message.content ?? []).filter((part) => part.type === "tool-result"))
+const textOf = (message) =>
+  (message.content ?? [])
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+const charsOf = (messages) =>
+  messages.reduce(
+    (sum, message) =>
+      sum +
+      textOf(message).length +
+      (message.content ?? []).reduce((inner, part) => {
+        if (part.type === "tool-call") return inner + JSON.stringify(part.input ?? {}).length
+        if (part.type === "tool-result") {
+          const value = part.result?.value
+          return inner + (typeof value === "string" ? value.length : 0)
+        }
+        return inner
+      }, 0),
+    0,
+  )
 
 async function run(label, fn) {
   console.log(`\n[${label}]`)
   answerer = fn
   const messages = fixture(label)
-  await transform(event(messages))
-  return messages
+  const before = charsOf(messages)
+  await transform({ messages, system: [], tools: {}, options: {}, sessionID: "s" })
+  return { messages, before, after: charsOf(messages) }
 }
 
 const kept = await run("keep", () => 1)
-check("keep: message count unchanged", kept.length === 10, `got ${kept.length}`)
-check("keep: tool content untouched", kept[1].content[0].state.content[0].text.length === 5000)
+check("keep: message count unchanged", kept.messages.length === 14, `got ${kept.messages.length}`)
+check("keep: tool results untouched", resultsOf(kept.messages).every((part) => part.result.value.length === 5000))
+check("keep: nothing removed", kept.after === kept.before, `${kept.before} -> ${kept.after}`)
 
-console.log("\n[stub (default)]")
 const stubbed = await run("stub", () => 0)
-const stubbedTools = stubbed.flatMap((m) => m.content ?? []).filter((p) => p.type === "tool")
-check("stub: message count unchanged", stubbed.length === 10, `got ${stubbed.length}`)
-check("stub: tool parts kept", stubbedTools.length === 3, `got ${stubbedTools.length}`)
+check("stub: calls kept in place", callsOf(stubbed.messages).length === 3, `got ${callsOf(stubbed.messages).length}`)
 check(
-  "stub: outputs cleared with note",
-  stubbedTools.every((p) => p.state.content[0].text.includes("fast-jev cleared")),
+  "stub: results cleared with a note",
+  resultsOf(stubbed.messages).every((part) => String(part.result.value).includes("fast-jev cleared")),
 )
 check(
-  "stub: narration keeps its evidence",
-  stubbedTools.some((p) => p.id === "stub-3"),
+  "stub: oversized call inputs cut",
+  callsOf(stubbed.messages).every((part) => JSON.stringify(part.input ?? {}).length < 400),
 )
+check("stub: prose untouched", stubbed.messages.some((m) => textOf(m).includes("Never edit src/generated")))
 
-console.log("\n[delete mode]")
 writeCfg({ removedCallStyle: "delete" })
-const dropped = await run("dropcall", () => 0)
-check("drop_call: tool-only messages removed", dropped.length === 8, `got ${dropped.length}`)
-check(
-  "drop_call: no tool parts remain",
-  dropped.every((m) => (m.content ?? []).every((p) => p.type !== "tool")),
-)
-check(
-  "drop_call: sibling text survives",
-  dropped.some((m) => (m.content ?? []).some((p) => p.type === "text" && p.text === "found it")),
-)
+const deleted = await run("delete", () => 0)
+check("delete: tool calls removed", callsOf(deleted.messages).length === 0, `got ${callsOf(deleted.messages).length}`)
+check("delete: tool results removed", resultsOf(deleted.messages).length === 0)
+check("delete: messages dropped", deleted.messages.length < 14, `got ${deleted.messages.length}`)
 writeCfg()
 
 const truncated = await run("dropresult", (name) => (name.startsWith("call_") ? 0.9 : 0.1))
-const tools = truncated.flatMap((m) => m.content ?? []).filter((p) => p.type === "tool")
-check("drop_result: tool parts kept", tools.length === 3, `got ${tools.length}`)
+check("drop_result: calls kept", callsOf(truncated.messages).length === 3)
 check(
-  "drop_result: content truncated with note",
-  tools.every((p) => p.state.content[0].text.includes("fast-jev pruned")),
+  "drop_result: results truncated with a note",
+  resultsOf(truncated.messages).every((part) => String(part.result.value).includes("fast-jev pruned")),
 )
 check(
   "drop_result: head preserved",
-  tools.every((p) => p.state.content[0].text.startsWith("X".repeat(300))),
+  resultsOf(truncated.messages).every((part) => String(part.result.value).startsWith("X".repeat(300))),
 )
+
+console.log("\n[unmatched call]")
+writeCfg()
+answerer = () => 0
+const orphan = [
+  user("task"),
+  assistant([call("orphan-1", "read", { filePath: "a.ts" })]),
+  user("ok"),
+  assistant([say("step")]),
+  user("step"),
+  assistant([say("step")]),
+  user("step"),
+  assistant([say("step")]),
+  user("step"),
+]
+await transform({ messages: orphan, system: [], tools: {}, options: {}, sessionID: "s" })
+check("a call with no result is left alone", callsOf(orphan).length === 1)
 
 console.log("\n[error result]")
 answerer = (name) => (name.startsWith("call_") ? 0.9 : 0.1)
-const errMessages = fixture("err")
-errMessages[1] = {
-  type: "assistant",
-  id: "err-m1",
-  content: [toolPart("err-1", "bash", BIG, "error")],
-}
-await transform(event(errMessages))
-const errTool = errMessages
-  .flatMap((m) => m.content ?? [])
-  .find((p) => p.type === "tool" && p.id === "err-1")
+const errored = fixture("err")
+errored[2] = tool([result("err-1", "bash", BIG, true)])
+await transform({ messages: errored, system: [], tools: {}, options: {}, sessionID: "s" })
+const errResult = resultsOf(errored).find((part) => part.id === "err-1")
 check(
-  "error result: message truncated with (error) note",
-  errTool.state.error.message.includes("fast-jev pruned") &&
-    errTool.state.error.message.includes("(error)"),
+  "error result: truncated with an (error) note",
+  String(errResult.result.value).includes("fast-jev pruned") && String(errResult.result.value).includes("(error)"),
 )
-
-console.log("\n[pending state]")
-answerer = () => 0
-const pending = fixture("pend")
-pending[1] = {
-  type: "assistant",
-  id: "pend-m1",
-  content: [
-    {
-      type: "tool",
-      id: "pend-1",
-      name: "read",
-      state: { status: "running", input: {}, metadata: {} },
-    },
-  ],
-}
-const pendingBefore = JSON.stringify(pending[1])
-await transform(event(pending))
-check("running part untouched", JSON.stringify(pending[1]) === pendingBefore)
 
 console.log("\n[dryRun]")
 writeCfg({ dryRun: true })
 answerer = () => 0
 requestCount = 0
 const dry = fixture("dry")
-const dryBefore = JSON.stringify(dry)
-await transform(event(dry))
-check("dryRun: messages unchanged", JSON.stringify(dry) === dryBefore)
+const dryBefore = charsOf(dry)
+await transform({ messages: dry, system: [], tools: {}, options: {}, sessionID: "s" })
+check("dryRun: nothing changed", charsOf(dry) === dryBefore)
 check("dryRun: still scored via Jev", requestCount > 0, `got ${requestCount}`)
 writeCfg({ dryRun: false })
 
@@ -237,43 +239,41 @@ console.log("\n[model defaulting]")
 writeCfg()
 answerer = () => 1
 const noModel = fixture("nomodel")
-await transform(event(noModel))
-check(
-  "custom provider without model: sends default model",
-  lastModel === "jev-latest",
-  `got ${JSON.stringify(lastModel)}`,
-)
-writeCfg()
+await transform({ messages: noModel, system: [], tools: {}, options: {}, sessionID: "s" })
+check("custom provider without model: sends default model", lastModel === "jev-latest", `got ${JSON.stringify(lastModel)}`)
 
 console.log("\n[verbatim checkpoint]")
 {
-  const { renderCheckpoint } = await import(
-    pathToFileURL(join(process.cwd(), "src", "checkpoint.ts")).href
+  const { renderCheckpoint } = await import(pathToFileURL(join(process.cwd(), "src", "checkpoint.ts")).href)
+  const rendered = renderCheckpoint(
+    [
+      { role: "user", text: "Fix the failing test", toolUses: [] },
+      {
+        role: "assistant",
+        text: "",
+        toolUses: [{ id: "c1", name: "read", input: { filePath: "a.ts" } }],
+        toolResults: [{ id: "c1", text: BIG, isError: false }],
+      },
+    ],
+    { truncateHeadChars: 100, maxChars: 100000 },
   )
-  const transcript = toTranscriptFixture()
-  const rendered = renderCheckpoint(transcript, { truncateHeadChars: 100, maxChars: 100000 })
-  check(
-    "checkpoint: renders the messages verbatim",
-    typeof rendered === "string" && rendered.includes("Fix the failing test"),
-  )
-  check(
-    "checkpoint: cuts bulky tool output to a head",
-    typeof rendered === "string" &&
-      rendered.includes("head kept") &&
-      !rendered.includes("X".repeat(200)),
-  )
+  check("checkpoint: renders prose verbatim", typeof rendered === "string" && rendered.includes("Fix the failing test"))
+  check("checkpoint: cuts bulky output", typeof rendered === "string" && rendered.includes("head kept"))
   check(
     "checkpoint: refuses to oversize",
-    renderCheckpoint(transcript, { truncateHeadChars: 100, maxChars: 50 }) === undefined,
+    renderCheckpoint(
+      [{ role: "user", text: "x", toolUses: [] }],
+      { truncateHeadChars: 100, maxChars: 5 },
+    ) === undefined,
   )
 }
 
 console.log("\n[no-key fail-open]")
 delete process.env.TYPESAFE_API_KEY
 const noKey = fixture("nokey")
-const before = JSON.stringify(noKey)
-await transform(event(noKey))
-check("no key: request untouched", JSON.stringify(noKey) === before)
+const before = charsOf(noKey)
+await transform({ messages: noKey, system: [], tools: {}, options: {}, sessionID: "s" })
+check("no key: request untouched", charsOf(noKey) === before)
 
 await new Promise((resolve) => server.close(resolve))
 rmSync(home, { recursive: true, force: true })

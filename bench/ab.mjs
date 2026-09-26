@@ -1,7 +1,7 @@
-import { DatabaseSync } from "node:sqlite"
+﻿import { DatabaseSync } from "node:sqlite"
 import { createServer } from "node:http"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { collectCalls } from "../src/engine/index.ts"
@@ -17,7 +17,7 @@ if (!KEY) {
   process.exit(1)
 }
 
-const DB = "C:/Users/Shaik faizan/.local/share/opencode/opencode.db"
+const DB = process.env.OPENCODE_DB ?? join(homedir(), ".local/share/opencode/opencode.db")
 const ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 const PRESERVE = 6
 const MAX_MESSAGES = Number(argOf("--messages") ?? 400)

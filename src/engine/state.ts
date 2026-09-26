@@ -87,9 +87,12 @@ function taskText(messages: readonly TranscriptMessage[]): string {
 
 function renderText(text: string, pinned: boolean, stage: Stage): string {
   if (!text) return ""
-  if (!pinned && stage.collapseOld) return `[… ${text.length} chars omitted …]`
-  if (!pinned && stage.abridgeOld) return abridge(text, TEXT_HEAD, TEXT_TAIL)
-  return text
+  // Prose goes to a third party too. Users paste .env contents and error traces
+  // into prompts, so it is redacted exactly like tool input is.
+  const safe = redactText(text)
+  if (!pinned && stage.collapseOld) return `[… ${safe.length} chars omitted …]`
+  if (!pinned && stage.abridgeOld) return abridge(safe, TEXT_HEAD, TEXT_TAIL)
+  return safe
 }
 
 /**

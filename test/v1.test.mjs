@@ -14,6 +14,7 @@ let answerer = () => 1
 let requestCount = 0
 let lastModel = null
 let lastQuestions = null
+let lastState = null
 
 const server = createServer((req, res) => {
   let body = ""
@@ -23,6 +24,7 @@ const server = createServer((req, res) => {
     const parsed = JSON.parse(body)
     lastModel = parsed.model
     lastQuestions = parsed.questions
+    lastState = parsed.state
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
       const p = answerer(name, question.type)
@@ -501,6 +503,41 @@ check(
     .every((p) => p.state.output.includes("fast-jev cleared")),
 )
 writeCfg()
+
+console.log("\n[redaction]")
+{
+  writeCfg()
+  answerer = () => 1
+  const SECRET_KEY = "sk-live-abcdefghijklmnopqrstuvwx"
+  const SECRET_PROSE = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+  const secretive = [
+    message("user", [text(`Deploy failed. AWS_SECRET_ACCESS_KEY=${SECRET_PROSE}`)]),
+    message("assistant", [
+      {
+        id: "sec-1-p",
+        sessionID: "s",
+        messageID: "m",
+        type: "tool",
+        callID: "sec-1",
+        tool: "bash",
+        state: {
+          status: "completed",
+          input: { command: "curl", apiKey: SECRET_KEY, Authorization: `Bearer ${SECRET_KEY}` },
+          output: `used ${SECRET_KEY} to call the api\n${BIG}`,
+          title: "bash",
+          metadata: {},
+          time: { start: 1, end: 2 },
+        },
+      },
+    ]),
+    ...tails(),
+  ]
+  await transform({}, { messages: secretive })
+  const sent = JSON.stringify(lastState ?? {}) + JSON.stringify(lastQuestions ?? {})
+  check("redaction: a credential-named input never leaves", !sent.includes(SECRET_KEY))
+  check("redaction: a pasted secret in prose never leaves", !sent.includes(SECRET_PROSE))
+  check("redaction: the state is still sent", lastState !== null && sent.length > 100)
+}
 
 console.log("\n[no-key fail-open]")
 delete process.env.TYPESAFE_API_KEY
