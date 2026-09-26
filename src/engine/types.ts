@@ -78,7 +78,8 @@ export interface StateToolCall {
 export interface StateEntry {
   role: Role
   text: string
-  calls?: StateToolCall[]
+  /** Structured per call, or one compact line per call once the state must shrink. */
+  calls?: Array<StateToolCall | string>
 }
 
 export interface JevState {

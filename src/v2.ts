@@ -1,4 +1,5 @@
 ﻿import { Plugin } from "@opencode/plugin"
+import { renderCheckpoint } from "./checkpoint.ts"
 import {
   getConfigIssues,
   loadConfig,
@@ -244,7 +245,35 @@ export const FastJevV2 = Plugin.define({
       }
     })
 
-    return () => registration.dispose()
+    /**
+     * The host writes a summary at compaction, which is lossy by construction.
+     * With `verbatimCheckpoint` the plugin records the checkpoint itself instead,
+     * so what survives compaction is the messages rather than a description of
+     * them. Registered unconditionally and gated inside, so flipping the option
+     * takes effect without a restart; any failure leaves the host's compaction
+     * alone.
+     */
+    const checkpoint = await ctx.session.hook("compaction", async (event) => {
+      try {
+        const cfg = loadConfig()
+        if (!cfg.enabled || !cfg.verbatimCheckpoint) return
+        const messages = (event as { messages?: unknown }).messages as unknown as V2Message[]
+        if (!Array.isArray(messages) || messages.length === 0) return
+        const summary = renderCheckpoint(toTranscriptMessages(messages), {
+          truncateHeadChars: cfg.truncateHeadChars,
+          maxChars: cfg.verbatimCheckpointMaxChars,
+        })
+        if (summary === undefined) return
+        ;(event as { result?: unknown }).result = { summary }
+      } catch {
+        /* fail-open: the host's own compaction runs instead */
+      }
+    })
+
+    return async () => {
+      await registration.dispose()
+      await checkpoint.dispose()
+    }
   },
 })
 

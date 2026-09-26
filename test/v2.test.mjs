@@ -73,19 +73,20 @@ check(
   typeof v1Hooks["experimental.chat.messages.transform"] === "function",
 )
 
-let hook = null
+const hooksByName = {}
 const ctx = {
   session: {
     hook: async (name, callback) => {
-      hook = { name, callback }
+      hooksByName[name] = callback
       return { dispose: async () => {} }
     },
   },
   app: { log: async () => {} },
 }
 await definition.setup(ctx)
-check("v2: registers the context hook", hook?.name === "context")
-const transform = hook.callback
+check("v2: registers the context hook", typeof hooksByName.context === "function")
+check("v2: registers the compaction hook", typeof hooksByName.compaction === "function")
+const transform = hooksByName.context
 
 const toolPart = (callID, name, output, status = "completed") => ({
   type: "tool",
@@ -98,6 +99,17 @@ const toolPart = (callID, name, output, status = "completed") => ({
 })
 const textPart = (value) => ({ type: "text", text: value })
 const BIG = "X".repeat(5000)
+
+const toTranscriptFixture = () => [
+  { role: "user", text: "Fix the failing test. Never edit src/generated.", toolUses: [] },
+  {
+    role: "assistant",
+    text: "",
+    toolUses: [{ id: "b1", name: "read", input: { filePath: "a.ts" } }],
+    toolResults: [{ id: "b1", text: BIG, isError: false }],
+  },
+  { role: "assistant", text: "done", toolUses: [] },
+]
 
 function fixture(tag) {
   return [
@@ -231,6 +243,29 @@ check(
   `got ${JSON.stringify(lastModel)}`,
 )
 writeCfg()
+
+console.log("\n[verbatim checkpoint]")
+{
+  const { renderCheckpoint } = await import(
+    pathToFileURL(join(process.cwd(), "src", "checkpoint.ts")).href
+  )
+  const transcript = toTranscriptFixture()
+  const rendered = renderCheckpoint(transcript, { truncateHeadChars: 100, maxChars: 100000 })
+  check(
+    "checkpoint: renders the messages verbatim",
+    typeof rendered === "string" && rendered.includes("Fix the failing test"),
+  )
+  check(
+    "checkpoint: cuts bulky tool output to a head",
+    typeof rendered === "string" &&
+      rendered.includes("head kept") &&
+      !rendered.includes("X".repeat(200)),
+  )
+  check(
+    "checkpoint: refuses to oversize",
+    renderCheckpoint(transcript, { truncateHeadChars: 100, maxChars: 50 }) === undefined,
+  )
+}
 
 console.log("\n[no-key fail-open]")
 delete process.env.TYPESAFE_API_KEY

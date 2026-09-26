@@ -56,10 +56,13 @@ export function collectCalls(
   return calls
 }
 
+type CallStyle = "full" | "brief" | "omit"
+
 interface Stage {
   inputCap: number
   abridgeOld: boolean
   collapseOld: boolean
+  callStyle: CallStyle
   dropOldTextless: boolean
 }
 
@@ -94,11 +97,17 @@ function renderText(text: string, pinned: boolean, stage: Stage): string {
  * that helps judge them travels with the question instead, so it is not re-sent
  * with every batch. Inputs are redacted before they leave the process.
  */
-function renderCall(call: ToolCall, stage: Stage): StateToolCall {
+function renderCall(call: ToolCall, stage: Stage): StateToolCall | string {
+  const input = redactText(clip(JSON.stringify(redactInput(call.input)), stage.inputCap))
+  if (stage.callStyle === "brief") {
+    return `${call.slot} ${call.tool} ${input.replace(/\s+/g, " ")} -> ${
+      call.isError ? "error" : "ok"
+    } ${call.resultChars}ch`
+  }
   return {
     n: call.slot,
     tool: call.tool,
-    input: redactText(clip(JSON.stringify(redactInput(call.input)), stage.inputCap)),
+    input,
     outcome: call.isError ? "error" : "ok",
     bytes: call.resultChars,
   }
@@ -131,7 +140,12 @@ export function buildState(
       if (!text && own.length === 0) return
       if (!pinned && !text && stage.dropOldTextless) return
       const entry: StateEntry = { role: message.role, text }
-      if (own.length > 0) entry.calls = own.map((call) => renderCall(call, stage))
+      if (own.length > 0) {
+        const calls = own
+          .filter((call) => pinned || stage.callStyle !== "omit")
+          .map((call) => renderCall(call, pinned ? { ...stage, callStyle: "full" } : stage))
+        if (calls.length > 0) entry.calls = calls
+      }
       history.push(entry)
     })
     const state: JevState = { task, history }
@@ -142,6 +156,7 @@ export function buildState(
     inputCap: INPUT_CAPS[0],
     abridgeOld: false,
     collapseOld: false,
+    callStyle: "full",
     dropOldTextless: false,
   }
   const ladder: Array<[Stage, string]> = [
@@ -154,14 +169,19 @@ export function buildState(
       "old messages collapsed",
     ],
     [
+      { ...base, inputCap: INPUT_CAPS[2], abridgeOld: true, collapseOld: true, callStyle: "brief" },
+      "old calls briefed",
+    ],
+    [
       {
         ...base,
         inputCap: INPUT_CAPS[2],
         abridgeOld: true,
         collapseOld: true,
+        callStyle: "omit",
         dropOldTextless: true,
       },
-      "old textless dropped",
+      "old calls omitted",
     ],
   ]
 

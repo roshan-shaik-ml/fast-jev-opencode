@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-opencode",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Verbatim context pruning for OpenCode v1 and v2: prune stale tool calls and truncate bulky tool results from the outgoing model request using TypeSafe Jev decisions, instead of summarizing context.",
   "type": "module",
   "main": "src/index.ts",
@@ -8,6 +8,13 @@
     ".": "./src/index.ts"
   },
   "license": "MIT",
+  "files": [
+    "src",
+    "fast-jev.example.json",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git"
@@ -32,6 +39,7 @@
     "bench": "node --experimental-strip-types bench/benchmark.mjs",
     "bench:savings": "node --experimental-strip-types bench/savings.mjs",
     "bench:baseline": "node --experimental-strip-types bench/baseline.mjs",
+    "bench:replay": "node --experimental-strip-types --experimental-sqlite bench/replay.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

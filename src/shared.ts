@@ -56,6 +56,8 @@ export interface Config {
   inputPrice: number
   cachedInputPrice: number
   cacheAware: boolean
+  verbatimCheckpoint: boolean
+  verbatimCheckpointMaxChars: number
   rules: RuleSet
   protectTools: string[]
   rejudgeAfterMs: number
@@ -106,6 +108,8 @@ const DEFAULTS = {
   inputPrice: 0,
   cachedInputPrice: 0,
   cacheAware: false,
+  verbatimCheckpoint: false,
+  verbatimCheckpointMaxChars: 200000,
   rules: { ...DEFAULT_RULES },
   protectTools: [] as string[],
   rejudgeAfterMs: 600000,
@@ -267,6 +271,13 @@ export function loadConfig(): Config {
     inputPrice: pickNum(file.inputPrice, DEFAULTS.inputPrice, 0, 10000),
     cachedInputPrice: pickNum(file.cachedInputPrice, DEFAULTS.cachedInputPrice, 0, 10000),
     cacheAware: pickBool(file.cacheAware, DEFAULTS.cacheAware),
+    verbatimCheckpoint: pickBool(file.verbatimCheckpoint, DEFAULTS.verbatimCheckpoint),
+    verbatimCheckpointMaxChars: pickNum(
+      file.verbatimCheckpointMaxChars,
+      DEFAULTS.verbatimCheckpointMaxChars,
+      1000,
+      2000000,
+    ),
     rules: {
       duplicate: pickBool(file.rules?.duplicate, DEFAULTS.rules.duplicate),
       superseded: pickBool(file.rules?.superseded, DEFAULTS.rules.superseded),

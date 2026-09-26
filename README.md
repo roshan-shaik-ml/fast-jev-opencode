@@ -74,6 +74,12 @@ A candidate is a tool call that is not pinned (first message / newest
 - **Cost-aware (optional):** set `inputPrice` / `cachedInputPrice` and `cacheAware: true` and a
   prune is refused when the cache it invalidates costs more than the tokens it removes. Left
   off by default because pricing varies by provider and contract.
+- **Verbatim checkpoint (opt-in):** `verbatimCheckpoint: true` makes compaction record the
+  messages themselves — text word for word, tool outputs cut to a bounded head — instead of the
+  model-written summary. What survives compaction is then the history rather than a description
+  of it. Off by default, and skipped when the rendering would exceed
+  `verbatimCheckpointMaxChars`, so the host's own compaction stays in charge if anything is
+  uncertain.
 - **Shape-preserving:** a call Jev rates as no longer needed keeps its place with the output
   cut short (`removedCallStyle: "stub"`). Deleting it leaves the assistant's narration with no
   evidence behind it, and a model that sees that shape starts reporting work it never did —
@@ -189,35 +195,37 @@ Without a valid key the plugin fails open: it logs a warning and sends the reque
 `~/.config/opencode/fast-jev.json` is re-read on every request, so edits apply without a
 restart. The shipped example is observe-only (`dryRun: true`).
 
-| Option                   | Default    | Meaning                                                                        |
-| ------------------------ | ---------- | ------------------------------------------------------------------------------ |
-| `enabled`                | `true`     | Master switch                                                                  |
-| `dryRun`                 | `true`     | Score and log, but do not rewrite the request                                  |
-| `provider`               | `typesafe` | `typesafe`, `zen`, `openrouter`, or `custom`                                   |
-| `baseUrl`                | preset     | System One endpoint (required for `custom`)                                    |
-| `model`                  | preset     | Jev model id                                                                   |
-| `apiKey`                 | `""`       | Inline key (prefer `apiKeyEnv`)                                                |
-| `apiKeyEnv`              | preset     | Environment variable holding the key                                           |
-| `apiKeyFile`             | `""`       | File containing the key                                                        |
-| `keepCallThreshold`      | `0.5`      | Minimum probability for the call itself to stay                                |
-| `keepResultThreshold`    | `0.25`     | Minimum probability for its output to stay verbatim                            |
-| `keepThreshold`          | _unset_    | Legacy override: sets both thresholds to one value                             |
-| `preserveRecentMessages` | `6`        | Newest messages never judged                                                   |
-| `maxStateTokens`         | `25000`    | State token ceiling                                                            |
-| `maxRequestTokens`       | `30000`    | State plus one batch of questions                                              |
-| `truncateHeadChars`      | `300`      | Head kept when a result is truncated                                           |
-| `minResultChars`         | `2000`     | Results below this are never candidates                                        |
-| `peekChars`              | `200`      | Head/tail excerpt of each result shown to Jev                                  |
-| `minScored`              | `8`        | Refuse a pass that scored this many calls and kept none                        |
-| `removedCallStyle`       | `"stub"`   | `"stub"` keeps a removed call with its output cut short; `"delete"` removes it |
-| `rules`                  | see below  | Free drops proved by the transcript, with no Jev request                       |
-| `inputPrice`             | `0`        | USD per million input tokens, for cost reporting (`0` = off)                   |
-| `cachedInputPrice`       | `0`        | USD per million cached input tokens                                            |
-| `cacheAware`             | `false`    | Refuse a prune that does not pay for itself at those prices                    |
-| `protectTools`           | `[]`       | Tool names whose calls/results are always kept                                 |
-| `rejudgeAfterMs`         | `600000`   | Re-score a call after this long; `0` re-scores every request                   |
-| `timeoutMs`              | `30000`    | Per-request deadline; a stalled endpoint fails open                            |
-| `log`                    | `true`     | Structured logging via the host client                                         |
+| Option                       | Default    | Meaning                                                                        |
+| ---------------------------- | ---------- | ------------------------------------------------------------------------------ |
+| `enabled`                    | `true`     | Master switch                                                                  |
+| `dryRun`                     | `true`     | Score and log, but do not rewrite the request                                  |
+| `provider`                   | `typesafe` | `typesafe`, `zen`, `openrouter`, or `custom`                                   |
+| `baseUrl`                    | preset     | System One endpoint (required for `custom`)                                    |
+| `model`                      | preset     | Jev model id                                                                   |
+| `apiKey`                     | `""`       | Inline key (prefer `apiKeyEnv`)                                                |
+| `apiKeyEnv`                  | preset     | Environment variable holding the key                                           |
+| `apiKeyFile`                 | `""`       | File containing the key                                                        |
+| `keepCallThreshold`          | `0.5`      | Minimum probability for the call itself to stay                                |
+| `keepResultThreshold`        | `0.25`     | Minimum probability for its output to stay verbatim                            |
+| `keepThreshold`              | _unset_    | Legacy override: sets both thresholds to one value                             |
+| `preserveRecentMessages`     | `6`        | Newest messages never judged                                                   |
+| `maxStateTokens`             | `25000`    | State token ceiling                                                            |
+| `maxRequestTokens`           | `30000`    | State plus one batch of questions                                              |
+| `truncateHeadChars`          | `300`      | Head kept when a result is truncated                                           |
+| `minResultChars`             | `2000`     | Results below this are never candidates                                        |
+| `peekChars`                  | `200`      | Head/tail excerpt of each result shown to Jev                                  |
+| `minScored`                  | `8`        | Refuse a pass that scored this many calls and kept none                        |
+| `removedCallStyle`           | `"stub"`   | `"stub"` keeps a removed call with its output cut short; `"delete"` removes it |
+| `rules`                      | see below  | Free drops proved by the transcript, with no Jev request                       |
+| `inputPrice`                 | `0`        | USD per million input tokens, for cost reporting (`0` = off)                   |
+| `cachedInputPrice`           | `0`        | USD per million cached input tokens                                            |
+| `cacheAware`                 | `false`    | Refuse a prune that does not pay for itself at those prices                    |
+| `verbatimCheckpoint`         | `false`    | At compaction, record the messages themselves instead of a summary             |
+| `verbatimCheckpointMaxChars` | `200000`   | Skip the checkpoint above this size and keep the host's summary                |
+| `protectTools`               | `[]`       | Tool names whose calls/results are always kept                                 |
+| `rejudgeAfterMs`             | `600000`   | Re-score a call after this long; `0` re-scores every request                   |
+| `timeoutMs`                  | `30000`    | Per-request deadline; a stalled endpoint fails open                            |
+| `log`                        | `true`     | Structured logging via the host client                                         |
 
 Set `FAST_JEV_CONFIG` to point the plugin at a different config file (used by the tests).
 
@@ -305,6 +313,27 @@ statistical claim - an independent replay over real Claude Code sessions found s
 barely beat head+tail at equal size (upstream
 
 run against your own transcripts, not a settled result.
+
+### On a real session
+
+`npm run bench:replay` reads OpenCode's own SQLite store (`~/.local/share/opencode/opencode.db`,
+read-only) and runs the same comparison over a session that actually happened:
+
+```
+session      "Investigating fast-jev" — 400 messages, 443 eligible calls
+chars        1,366,526 -> 1,182,525   (-13.5%)
+jev requests 2
+
+             needed calls intact   evidence tokens kept
+ours             222/241              4742/5881
+head+tail        218/241              4738/5881
+```
+
+**On real traffic the selection beats plain truncation by about 2%, at the same size.** That is
+a narrow margin, and it agrees with the independent replay quoted above. Read the project
+accordingly: the value is that pruning is **safe** - pairing preserved, text untouched, secrets
+redacted, failures failing open - not that the choosing is clever. The same run also reports
+the session's own economics, where cache reads dominated input by ~96x.
 
 ## Test
 
