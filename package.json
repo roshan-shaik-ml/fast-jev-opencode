@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "description": "OpenCode v1 plugin: prune stale tool calls and truncate bulky tool results from the outgoing model request using TypeSafe Jev decisions, instead of summarizing context.",
   "type": "module",
+  "main": "plugins/fast-jev.ts",
+  "exports": {
+    ".": "./plugins/fast-jev.ts"
+  },
   "license": "MIT",
   "keywords": [
     "opencode",
