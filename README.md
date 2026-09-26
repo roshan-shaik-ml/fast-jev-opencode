@@ -89,6 +89,8 @@ restart. `FAST_JEV_CONFIG` points the plugin at a different file. The
 | `protectTools`           | `[]`       | Tool names whose calls/results are always kept                       |
 | `cacheAware`             | `false`    | With `inputPrice` / `cachedInputPrice`, refuse prunes that cost more |
 | `verbatimCheckpoint`     | `false`    | At compaction, record the messages themselves instead of a summary   |
+| `effortEnabled`          | `false`    | v2: let Jev choose the request's reasoning effort (see below)        |
+| `effortLevels`           | see below  | Levels offered when the model declares none of its own               |
 | `log`                    | `true`     | Structured logging via the host client                               |
 
 Presets: `typesafe` (`api.typesafe.ai/v1/systemone`, `jev-latest`), `zen`
@@ -128,6 +130,26 @@ A candidate is a tool call that is not pinned (first message / newest
 - **Cached and cost-aware:** decisions are cached per call id (`rejudgeAfterMs`); with
   `inputPrice` / `cachedInputPrice` and `cacheAware: true` a prune is refused when the cache it
   invalidates costs more than the tokens it removes.
+
+## Effort selection
+
+Off by default; set `effortEnabled: true` to use. Before the pruning pass the plugin asks
+Jev one question — how much reasoning does this request need? — and records the answer as an
+`effort` part on the outgoing request. The host resolves that into whatever the provider
+speaks: OpenAI's `reasoning_effort`, a thinking budget, or a boolean and a budget. The plugin
+never writes provider dialect itself, which matters because every provider expresses effort
+differently.
+
+The levels offered to Jev are computed for the target model, first hit wins:
+
+1. `effortModels["provider/model"]`, or `effortModels["provider"]`, from your config.
+2. The variants that model declares — the host's own idea of effort for it.
+3. `effortLevels`, default `["low", "medium", "high"]`: the slice essentially every provider
+   expresses, so a choice is always expressible.
+
+If the model reports `compatibility.supportsEffortUpdates: false`, nothing is injected. The
+decision is cached per session and digest for `rejudgeAfterMs`, so a turn asks once, and a
+failure fails open with the request untouched. v1 has no effort parts, so this is v2-only.
 
 ## Measured
 

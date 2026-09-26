@@ -7,8 +7,10 @@ import {
   buildState,
   collectCalls,
   decide,
+  DEFAULT_EFFORT_LEVELS,
   DEFAULT_RULES,
   lacksKeepSignal,
+  orderLevels,
   prefilter,
   questionsForStyle,
   type JevAnswer,
@@ -17,6 +19,7 @@ import {
   type CallAction,
   type CallAnswer,
   type Decision,
+  type EffortLevel,
   type JevAsker,
   type Thresholds,
   type ToolCall,
@@ -66,6 +69,10 @@ export interface Config {
   rejudgeAfterMs: number
   timeoutMs: number
   log: boolean
+  effortEnabled: boolean
+  effortLevels: EffortLevel[]
+  effortModels: Record<string, EffortLevel[]>
+  effortDigestChars: number
 }
 
 export const PRESETS: Record<
@@ -119,6 +126,10 @@ const DEFAULTS = {
   rejudgeAfterMs: 600000,
   timeoutMs: 30000,
   log: true,
+  effortEnabled: false,
+  effortLevels: [...DEFAULT_EFFORT_LEVELS],
+  effortModels: {} as Record<string, EffortLevel[]>,
+  effortDigestChars: 500,
 }
 
 const CONFIG_CANDIDATES = process.env.FAST_JEV_CONFIG
@@ -225,6 +236,22 @@ function pickNum(value: unknown, fallback: number, min: number, max: number): nu
   return Math.min(max, Math.max(min, n))
 }
 
+function pickEffortLevels(value: unknown, fallback: EffortLevel[]): EffortLevel[] {
+  const ordered = orderLevels(Array.isArray(value) ? value : [])
+  return ordered.length > 0 ? ordered : [...fallback]
+}
+
+/** Per-provider or per-model level lists, keyed `provider` or `provider/model`. */
+function pickEffortModels(value: unknown): Record<string, EffortLevel[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  const out: Record<string, EffortLevel[]> = {}
+  for (const [key, levels] of Object.entries(value as Record<string, unknown>)) {
+    const ordered = orderLevels(Array.isArray(levels) ? levels : [])
+    if (ordered.length > 0) out[key.toLowerCase()] = ordered
+  }
+  return out
+}
+
 export function loadConfig(): Config {
   const file = readConfigFile()
   const rawProvider = file.provider
@@ -302,7 +329,37 @@ export function loadConfig(): Config {
     ),
     timeoutMs: pickNum(file.timeoutMs, DEFAULTS.timeoutMs, 1000, 300000),
     log: pickBool(file.log, DEFAULTS.log),
+    effortEnabled: pickBool(file.effortEnabled, DEFAULTS.effortEnabled),
+    effortLevels: pickEffortLevels(file.effortLevels, DEFAULTS.effortLevels),
+    effortModels: pickEffortModels(file.effortModels),
+    effortDigestChars: pickNum(file.effortDigestChars, DEFAULTS.effortDigestChars, 80, 4000),
   }
+}
+
+/**
+ * The effort levels a given model can express. A variant the model declares is
+ * the host's own idea of an effort for that model, so it wins; config can
+ * override per provider or per model; the fallback is the slice every provider
+ * expresses. Jev is only ever offered these, so its answer is always a level
+ * the target model actually has.
+ */
+export function effortLadder(
+  cfg: Config,
+  providerID: string | undefined,
+  modelID: string | undefined,
+  variants: readonly string[],
+): EffortLevel[] {
+  const keys = [providerID && modelID ? `${providerID}/${modelID}` : "", providerID ?? ""]
+    .filter((key) => key.length > 0)
+    .map((key) => key.toLowerCase())
+  for (const key of keys) {
+    const configured = cfg.effortModels[key]
+    if (configured && configured.length > 0) return configured
+  }
+  const declared = orderLevels(variants)
+  if (declared.length > 0) return declared
+  if (cfg.effortLevels.length > 0) return cfg.effortLevels
+  return [...DEFAULT_EFFORT_LEVELS]
 }
 
 export function resolveThresholds(cfg: Config): Thresholds {

@@ -1,6 +1,14 @@
 ﻿import { Plugin } from "@opencode/plugin"
 import { renderCheckpoint } from "./checkpoint.ts"
 import {
+  effortDigest,
+  effortFromAnswer,
+  effortQuestion,
+  type EffortLevel,
+  type JevAsker,
+} from "./engine/index.ts"
+import {
+  effortLadder,
   getConfigIssues,
   loadConfig,
   makeAsker,
@@ -11,6 +19,7 @@ import {
   stubbedResultText,
   truncatedResultText,
   type CallAction,
+  type Config,
   type RemovedCallStyle,
   type TranscriptMessage,
 } from "./shared.ts"
@@ -42,6 +51,8 @@ interface V2Part {
   name?: string
   input?: unknown
   result?: V2ResultValue
+  effort?: string
+  previous?: string
 }
 
 interface V2Message {
@@ -122,6 +133,93 @@ export function countKnownParts(messages: V2Message[]): { known: number; total: 
   }
   return { known, total }
 }
+
+/**
+ * The effort already in force in these messages. The host records an effort
+ * change as an `effort` part, and a later one supersedes an earlier one.
+ */
+function currentEffort(messages: V2Message[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    for (const part of messages[i]?.content ?? []) {
+      if (part.type === "effort" && typeof part.effort === "string") return part.effort
+    }
+  }
+  return undefined
+}
+
+/**
+ * Records the chosen effort as the host's own `effort` part on the newest user
+ * message, which is where the runtime's `resolveEffortUpdates` looks for it.
+ * Only the outgoing request is touched; the persisted history stays as it was.
+ */
+function applyEffort(messages: V2Message[], level: EffortLevel): boolean {
+  const previous = currentEffort(messages)
+  if (previous === level) return false
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message?.role !== "user" || !Array.isArray(message.content)) continue
+    message.content.push(
+      previous ? { type: "effort", effort: level, previous } : { type: "effort", effort: level },
+    )
+    return true
+  }
+  return false
+}
+
+/** The newest user text plus counts — small enough to charge to every question. */
+function digestForEffort(messages: V2Message[], chars: number): string {
+  let task = ""
+  let toolCalls = 0
+  let total = 0
+  for (const message of messages) {
+    for (const part of message.content ?? []) {
+      if (part.type === "text" && typeof part.text === "string") {
+        total += part.text.length
+        if (message.role === "user") task = part.text
+      } else if (part.type === "tool-call") {
+        toolCalls += 1
+        try {
+          total += JSON.stringify(part.input ?? {}).length
+        } catch {
+          total += 20
+        }
+      } else if (part.type === "tool-result") {
+        total += resultText(part.result).length
+      }
+    }
+  }
+  return effortDigest({ task, messages: messages.length, toolCalls, chars: total }, chars)
+}
+
+/** What the target model supports, as far as the host will say. */
+function modelSupport(
+  ctx: { model?: { get?: (providerID: string, modelID: string) => unknown } },
+  model: { providerID?: string; id?: string } | undefined,
+): { variants: string[]; supports?: boolean } {
+  try {
+    if (!model?.providerID || !model.id || typeof ctx.model?.get !== "function") {
+      return { variants: [] }
+    }
+    const info = ctx.model.get(model.providerID, model.id) as
+      | {
+          variants?: Array<{ id?: unknown }>
+          compatibility?: { supportsEffortUpdates?: unknown }
+        }
+      | undefined
+    const variants = Array.isArray(info?.variants)
+      ? info.variants
+          .map((variant) => variant?.id)
+          .filter((id): id is string => typeof id === "string")
+      : []
+    const supports = info?.compatibility?.supportsEffortUpdates
+    return { variants, supports: typeof supports === "boolean" ? supports : undefined }
+  } catch {
+    return { variants: [] }
+  }
+}
+
+/** Effort decisions, keyed by ladder and digest, so a turn asks once. */
+const effortCache = new Map<string, { level: EffortLevel; at: number }>()
 
 interface Located {
   message: V2Message
@@ -226,6 +324,43 @@ export const FastJevV2 = Plugin.define({
       }
     }
 
+    /**
+     * One Jev question per request: how much reasoning does this need? The
+     * levels offered are the ones the target model can express, so the answer
+     * never has to be translated by us - the host's protocol driver owns the
+     * provider dialect (OpenAI's `reasoning_effort`, a thinking budget, or a
+     * boolean and a budget, depending on the provider).
+     */
+    const selectEffort = async (
+      messages: V2Message[],
+      cfg: Config,
+      asker: JevAsker,
+      model: { providerID?: string; id?: string } | undefined,
+      sessionID: string | undefined,
+    ): Promise<{ level: EffortLevel; ladder: EffortLevel[]; requests: number } | undefined> => {
+      const support = modelSupport(ctx, model)
+      if (support.supports === false) {
+        if (cfg.log) log("debug", "effort: model does not accept effort updates")
+        return undefined
+      }
+      const ladder = effortLadder(cfg, model?.providerID, model?.id, support.variants)
+      const digest = digestForEffort(messages, cfg.effortDigestChars)
+      const key = `${sessionID ?? ""}|${ladder.join(",")}|${digest}`
+      const cached = effortCache.get(key)
+      if (cached && cfg.rejudgeAfterMs > 0 && Date.now() - cached.at < cfg.rejudgeAfterMs) {
+        return { level: cached.level, ladder, requests: 0 }
+      }
+      const answers = await asker.ask({ task: digest }, effortQuestion(ladder, digest))
+      const level = effortFromAnswer(answers.effort, ladder)
+      if (!level) return undefined
+      effortCache.set(key, { level, at: Date.now() })
+      if (effortCache.size > 64) {
+        const oldest = [...effortCache.entries()].sort((a, b) => a[1].at - b[1].at)[0]
+        if (oldest) effortCache.delete(oldest[0])
+      }
+      return { level, ladder, requests: 1 }
+    }
+
     const registration = await ctx.session.hook("context", async (event) => {
       try {
         const cfg = loadConfig()
@@ -250,7 +385,41 @@ export const FastJevV2 = Plugin.define({
           if (cfg.log) log("warn", "no Jev API key configured; leaving request untouched")
           return
         }
-        const result = await plan(toTranscriptMessages(messages), cfg, makeAsker(cfg, apiKey))
+        const asker = makeAsker(cfg, apiKey)
+
+        // Effort first: one question, and the pruning pass below is the expensive
+        // one. A failure here must never stop the prune, so it is caught locally.
+        if (cfg.effortEnabled) {
+          try {
+            const model = (event as { model?: { providerID?: string; id?: string } }).model
+            const sessionID = (event as { sessionID?: string }).sessionID
+            const choice = await selectEffort(messages, cfg, asker, model, sessionID)
+            if (!choice) {
+              if (cfg.log) log("debug", "effort: no level selected; request left as-is")
+            } else if (cfg.dryRun) {
+              if (cfg.log)
+                log("info", `dry-run: would set effort ${choice.level}`, {
+                  ladder: choice.ladder,
+                  requests: choice.requests,
+                })
+            } else if (applyEffort(messages, choice.level)) {
+              if (cfg.log)
+                log("info", "effort set", {
+                  level: choice.level,
+                  ladder: choice.ladder,
+                  requests: choice.requests,
+                })
+            }
+          } catch (error) {
+            if (cfg.log)
+              log(
+                "warn",
+                `effort fail-open: ${error instanceof Error ? error.message : String(error)}`,
+              )
+          }
+        }
+
+        const result = await plan(toTranscriptMessages(messages), cfg, asker)
         if (result.blocked) {
           if (cfg.log)
             log("warn", `keep-signal guard (${result.blockedReason}): request left untouched`, {

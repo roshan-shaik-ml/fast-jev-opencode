@@ -27,6 +27,7 @@ process.env.TYPESAFE_API_KEY = "test-key"
 
 let answerer = () => 1
 let requestCount = 0
+let effortRequests = 0
 let lastModel = null
 
 const server = createServer((req, res) => {
@@ -36,6 +37,7 @@ const server = createServer((req, res) => {
     requestCount += 1
     const parsed = JSON.parse(body)
     lastModel = parsed.model
+    if (parsed.questions && "effort" in parsed.questions) effortRequests += 1
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
       const p = answerer(name, question.type)
@@ -93,6 +95,7 @@ check(
 )
 
 const hooksByName = {}
+const modelInfos = {}
 const ctx = {
   session: {
     hook: async (name, callback) => {
@@ -101,6 +104,9 @@ const ctx = {
     },
   },
   app: { log: async () => {} },
+  model: {
+    get: (providerID, modelID) => modelInfos[`${providerID}/${modelID}`],
+  },
 }
 await definition.setup(ctx)
 check("v2: registers the context hook", typeof hooksByName.context === "function")
@@ -111,7 +117,7 @@ const BIG = "X".repeat(5000)
 
 function fixture(tag) {
   return [
-    user("Fix the failing test. Never edit src/generated."),
+    user(`Fix the failing test. Never edit src/generated. [${tag}]`),
     assistant([call(`${tag}-1`, "read", { filePath: "a.ts" })]),
     tool([result(`${tag}-1`, "read", BIG)]),
     assistant([call(`${tag}-2`, "bash", { command: "npm test" })]),
@@ -302,6 +308,99 @@ console.log("\n[verbatim checkpoint]")
       maxChars: 5,
     }) === undefined,
   )
+}
+
+console.log("\n[effort]")
+{
+  const effortParts = (messages) =>
+    messages.flatMap((message) => message.content ?? []).filter((part) => part.type === "effort")
+  const model = { providerID: "opencode-go", id: "qwen3.8-max" }
+  const runEffort = async (messages, sessionID = "s") =>
+    transform({ messages, system: [], tools: {}, options: {}, sessionID, model })
+
+  writeCfg()
+  answerer = () => 1
+  const off = fixture("eff-off")
+  await runEffort(off)
+  check("effort: off by default, nothing injected", effortParts(off).length === 0)
+
+  writeCfg({ effortEnabled: true, rejudgeAfterMs: 0 })
+  answerer = (name) =>
+    name === "effort" ? { probabilities: { low: 0.05, medium: 0.1, high: 0.85 } } : 1
+  const on = fixture("eff-on")
+  await runEffort(on)
+  const injected = effortParts(on)
+  check("effort: one part injected", injected.length === 1, `got ${injected.length}`)
+  check(
+    "effort: the most probable level is chosen",
+    injected[0]?.effort === "high",
+    `got ${injected[0]?.effort}`,
+  )
+  check("effort: no previous when none was in force", injected[0]?.previous === undefined)
+  check(
+    "effort: attaches to the newest user message",
+    (on[on.length - 1].content ?? []).includes(injected[0]),
+  )
+  check(
+    "effort: a part the host would read, not a rewrite of the prose",
+    on[on.length - 1].content[0].type === "text",
+  )
+
+  modelInfos["opencode-go/qwen3.8-max"] = {
+    variants: [{ id: "high" }, { id: "max" }],
+    compatibility: { supportsEffortUpdates: true },
+  }
+  answerer = (name) => (name === "effort" ? { probabilities: { max: 0.9, high: 0.05 } } : 1)
+  const laddered = fixture("eff-ladder")
+  await runEffort(laddered)
+  check(
+    "effort: the model's own ladder is offered",
+    effortParts(laddered)[0]?.effort === "max",
+    `got ${effortParts(laddered)[0]?.effort}`,
+  )
+
+  modelInfos["opencode-go/qwen3.8-max"] = {
+    variants: [{ id: "max" }],
+    compatibility: { supportsEffortUpdates: false },
+  }
+  const unsupported = fixture("eff-skip")
+  await runEffort(unsupported)
+  check(
+    "effort: a model refusing effort updates is left alone",
+    effortParts(unsupported).length === 0,
+  )
+
+  delete modelInfos["opencode-go/qwen3.8-max"]
+  answerer = () => 1
+  const silent = fixture("eff-silent")
+  await runEffort(silent)
+  check("effort: an unusable answer injects nothing", effortParts(silent).length === 0)
+
+  answerer = (name) =>
+    name === "effort" ? { probabilities: { high: 0.9, low: 0.05, medium: 0.05 } } : 1
+  const twice = fixture("eff-twice")
+  await runEffort(twice)
+  await runEffort(twice)
+  check("effort: a repeat pass keeps a single part", effortParts(twice).length === 1)
+
+  writeCfg({ effortEnabled: true })
+  const before = effortRequests
+  const shared = fixture("eff-shared")
+  await runEffort(shared)
+  const firstPass = effortRequests - before
+  await runEffort(shared)
+  const secondPass = effortRequests - before - firstPass
+  await runEffort(shared, "other")
+  const otherSession = effortRequests - before - firstPass - secondPass
+  check("effort: a fresh digest asks once", firstPass === 1, `got ${firstPass}`)
+  check("effort: a cached decision asks nothing", secondPass === 0, `got ${secondPass}`)
+  check("effort: another session is scored separately", otherSession === 1, `got ${otherSession}`)
+
+  writeCfg({ effortEnabled: true, dryRun: true })
+  const dryEffort = fixture("eff-dry")
+  await runEffort(dryEffort)
+  check("effort: dryRun injects nothing", effortParts(dryEffort).length === 0)
+  writeCfg()
 }
 
 console.log("\n[no-key fail-open]")
