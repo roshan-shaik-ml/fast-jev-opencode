@@ -40,6 +40,7 @@ const baseCfg = {
   provider: "custom",
   baseUrl: `http://127.0.0.1:${port}`,
   apiKeyEnv: "TYPESAFE_API_KEY",
+  questionStyle: "noul",
   preserveRecentMessages: 6,
   minResultChars: 0,
   rejudgeAfterMs: 600000,

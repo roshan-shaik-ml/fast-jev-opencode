@@ -10,7 +10,9 @@ import {
   DEFAULT_RULES,
   lacksKeepSignal,
   prefilter,
-  questionsFor,
+  questionsForStyle,
+  type JevAnswer,
+  type QuestionStyle,
   type RuleSet,
   type CallAction,
   type CallAnswer,
@@ -53,6 +55,7 @@ export interface Config {
   peekChars: number
   minScored: number
   removedCallStyle: RemovedCallStyle
+  questionStyle: QuestionStyle
   inputPrice: number
   cachedInputPrice: number
   cacheAware: boolean
@@ -95,8 +98,8 @@ const DEFAULTS = {
   apiKeyFile: "",
   baseUrl: "",
   model: "",
-  keepCallThreshold: 0.5,
-  keepResultThreshold: 0.25,
+  keepCallThreshold: 0.25,
+  keepResultThreshold: 0.15,
   preserveRecentMessages: 6,
   maxStateTokens: 25000,
   maxRequestTokens: 30000,
@@ -105,6 +108,7 @@ const DEFAULTS = {
   peekChars: 200,
   minScored: 8,
   removedCallStyle: "stub" as RemovedCallStyle,
+  questionStyle: "choice" as QuestionStyle,
   inputPrice: 0,
   cachedInputPrice: 0,
   cacheAware: false,
@@ -268,6 +272,10 @@ export function loadConfig(): Config {
       file.removedCallStyle === "delete" || file.removedCallStyle === "stub"
         ? file.removedCallStyle
         : DEFAULTS.removedCallStyle,
+    questionStyle:
+      file.questionStyle === "choice" || file.questionStyle === "noul"
+        ? file.questionStyle
+        : DEFAULTS.questionStyle,
     inputPrice: pickNum(file.inputPrice, DEFAULTS.inputPrice, 0, 10000),
     cachedInputPrice: pickNum(file.cachedInputPrice, DEFAULTS.cachedInputPrice, 0, 10000),
     cacheAware: pickBool(file.cacheAware, DEFAULTS.cacheAware),
@@ -358,6 +366,31 @@ export function shrinkInput(
     }
   }
   return out
+}
+
+/**
+ * Normalise either question shape into the same pair of numbers.
+ *
+ * A `choice` answer competes its options against each other, so its probabilities
+ * sum to one. Mapping "truncate" onto the call and "keep" onto the result lets
+ * the same thresholds decide either shape: `keepResult` is how likely the full
+ * output is still wanted, `keepCall` how likely the call is worth keeping at all.
+ */
+function answerFrom(
+  slot: number,
+  answers: Record<string, JevAnswer>,
+  style: QuestionStyle,
+): CallAnswer {
+  if (style === "choice") {
+    const probabilities = answers[`decision_${slot}`]?.probabilities ?? {}
+    const keep = typeof probabilities.keep === "number" ? probabilities.keep : 0
+    const truncate = typeof probabilities.truncate === "number" ? probabilities.truncate : 0
+    return { keepCall: keep + truncate, keepResult: keep }
+  }
+  return {
+    keepCall: answers[`call_${slot}`]?.noul ?? 1,
+    keepResult: answers[`result_${slot}`]?.noul ?? 1,
+  }
 }
 
 /** The note left when a call is stubbed rather than deleted. */
@@ -453,18 +486,21 @@ export async function plan(
     })
     stateTokens = fitted.tokens
     stage = fitted.stage
-    for (const batch of batchCalls(needed, fitted.tokens, cfg.maxRequestTokens, cfg.peekChars)) {
-      const questions = Object.assign({}, ...batch.map((call) => questionsFor(call, cfg.peekChars)))
+    for (const batch of batchCalls(
+      needed,
+      fitted.tokens,
+      cfg.maxRequestTokens,
+      cfg.peekChars,
+      cfg.questionStyle,
+    )) {
+      const questions = Object.assign(
+        {},
+        ...batch.map((call) => questionsForStyle(call, cfg.questionStyle, cfg.peekChars)),
+      )
       const answers = await asker.ask(fitted.state, questions)
       requests += 1
       for (const call of batch) {
-        cache.set(call.id, {
-          answer: {
-            keepCall: answers[`call_${call.slot}`] ?? 1,
-            keepResult: answers[`result_${call.slot}`] ?? 1,
-          },
-          at: now,
-        })
+        cache.set(call.id, { answer: answerFrom(call.slot, answers, cfg.questionStyle), at: now })
       }
     }
   }

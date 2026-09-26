@@ -26,7 +26,11 @@ const server = createServer((req, res) => {
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
       const p = answerer(name, question.type)
-      if (question.type === "noul" && typeof p === "number") answers[name] = { noul: p }
+      if (typeof p === "number") {
+        if (question.type === "noul") answers[name] = { noul: p }
+      } else if (p && typeof p === "object") {
+        answers[name] = p
+      }
     }
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ answers }))
@@ -42,6 +46,7 @@ const baseCfg = {
   provider: "custom",
   baseUrl: `http://127.0.0.1:${port}`,
   apiKeyEnv: "TYPESAFE_API_KEY",
+  questionStyle: "noul",
   preserveRecentMessages: 6,
   minResultChars: 0,
   rejudgeAfterMs: 600000,
@@ -454,6 +459,48 @@ check(
   d2.state.output.length === 5000,
   `got ${d2.state.output.length}`,
 )
+
+console.log("\n[choice questions]")
+writeCfg({ questionStyle: "choice" })
+
+const keptByChoice = await run("choicekeep", (name, type) =>
+  type === "choice" ? { probabilities: { keep: 0.9, truncate: 0.05, drop: 0.05 } } : 1,
+)
+check(
+  "choice: keep wins",
+  keptByChoice
+    .flatMap((m) => m.parts)
+    .filter((p) => p.type === "tool")
+    .every((p) => p.state.output.length === 5000),
+)
+check(
+  "choice: one question per call with three options",
+  typeof lastQuestions?.decision_1?.instructions === "string" &&
+    Object.keys(lastQuestions.decision_1.criteria).join(",") === "keep,truncate,drop",
+)
+
+const truncatedByChoice = await run("choicetrunc", (name, type) =>
+  type === "choice" ? { probabilities: { keep: 0.05, truncate: 0.9, drop: 0.05 } } : 1,
+)
+check(
+  "choice: truncate shortens without clearing",
+  truncatedByChoice
+    .flatMap((m) => m.parts)
+    .filter((p) => p.type === "tool")
+    .every((p) => p.state.output.includes("fast-jev pruned")),
+)
+
+const droppedByChoice = await run("choicedrop", (name, type) =>
+  type === "choice" ? { probabilities: { keep: 0.02, truncate: 0.03, drop: 0.95 } } : 1,
+)
+check(
+  "choice: drop clears the call",
+  droppedByChoice
+    .flatMap((m) => m.parts)
+    .filter((p) => p.type === "tool")
+    .every((p) => p.state.output.includes("fast-jev cleared")),
+)
+writeCfg()
 
 console.log("\n[no-key fail-open]")
 delete process.env.TYPESAFE_API_KEY

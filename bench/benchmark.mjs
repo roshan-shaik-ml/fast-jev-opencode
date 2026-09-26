@@ -4,17 +4,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { collectCalls, decide } from "../src/engine/index.ts"
+import { answer, noulProbability } from "./stub.mjs"
 
 const PRESERVE = 6
-const THRESHOLDS = { keepCall: 0.5, keepResult: 0.25 }
+const THRESHOLDS = { keepCall: 0.25, keepResult: 0.15 }
 
 // Stub Jev: one third truncated, one third kept, one third removed.
-function probability(name) {
-  const slot = Number(name.match(/_(\d+)$/)?.[1] ?? "1")
-  const bucket = slot % 3
-  if (name.startsWith("call_")) return bucket === 2 ? 0.2 : 0.9
-  return bucket === 0 ? 0.9 : 0.2
-}
 
 let requestCount = 0
 const server = createServer((req, res) => {
@@ -25,7 +20,7 @@ const server = createServer((req, res) => {
     const parsed = JSON.parse(body)
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
-      if (question.type === "noul") answers[name] = { noul: probability(name) }
+      answers[name] = answer(name, question.type)
     }
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ answers }))
@@ -153,8 +148,8 @@ const actionsA = calls
     decide(
       call,
       {
-        keepCall: probability(`call_${call.slot}`),
-        keepResult: probability(`result_${call.slot}`),
+        keepCall: noulProbability(`call_${call.slot}`),
+        keepResult: noulProbability(`result_${call.slot}`),
       },
       THRESHOLDS,
     ),
@@ -204,7 +199,9 @@ for (const message of messages) {
 const actionsB = callIDs.map((id) => {
   const part = seen.get(id)
   if (!part) return "drop_call"
-  return (part.state.output ?? "").includes("fast-jev pruned") ? "drop_result" : "keep"
+  const text = part.state.output ?? ""
+  if (text.includes("fast-jev cleared")) return "drop_call"
+  return text.includes("fast-jev pruned") ? "drop_result" : "keep"
 })
 
 console.log("adapter          (v1 hook, same stub answers)")

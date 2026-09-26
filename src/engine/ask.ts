@@ -1,4 +1,4 @@
-import type { JevAsker, JevQuestions } from "./types.ts"
+import type { JevAnswer, JevAsker, JevQuestions } from "./types.ts"
 
 export const DEFAULT_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 export const DEFAULT_MODEL = "jev-latest"
@@ -12,11 +12,11 @@ export interface JevClientOptions {
 }
 
 /**
- * Asked answers are probabilities in [0, 1]. A question the endpoint did not
- * answer is treated as 1 ("keep") rather than an error: keeping content is the
- * safe direction, and a partial answer should never become a silent deletion.
+ * A question the endpoint did not answer is left out rather than treated as an
+ * error: the caller decides what a missing answer means, and keeping content is
+ * the safe direction. A partial answer must never become a silent deletion.
  */
-function parseAnswers(text: string, names: string[]): Record<string, number> {
+function parseAnswers(text: string, names: string[]): Record<string, JevAnswer> {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
@@ -27,11 +27,26 @@ function parseAnswers(text: string, names: string[]): Record<string, number> {
   if (!answers || typeof answers !== "object") {
     throw new Error("Jev response is missing answers")
   }
-  const record = answers as Record<string, { noul?: unknown } | undefined>
-  const out: Record<string, number> = {}
+  const record = answers as Record<string, JevAnswer | undefined>
+  const out: Record<string, JevAnswer> = {}
   for (const name of names) {
-    const value = record[name]?.noul
-    out[name] = typeof value === "number" && Number.isFinite(value) ? value : 1
+    const value = record[name]
+    if (!value || typeof value !== "object") continue
+    const answer: JevAnswer = {}
+    if (typeof value.noul === "number" && Number.isFinite(value.noul)) answer.noul = value.noul
+    if (typeof value.choice === "string") answer.choice = value.choice
+    if (typeof value.confidence === "number" && Number.isFinite(value.confidence)) {
+      answer.confidence = value.confidence
+    }
+    if (value.probabilities && typeof value.probabilities === "object") {
+      const probabilities: Record<string, number> = {}
+      for (const [key, probability] of Object.entries(value.probabilities)) {
+        if (typeof probability === "number" && Number.isFinite(probability))
+          probabilities[key] = probability
+      }
+      answer.probabilities = probabilities
+    }
+    if (Object.keys(answer).length > 0) out[name] = answer
   }
   return out
 }
@@ -52,7 +67,7 @@ export class JevClient implements JevAsker {
     this.fetcher = options.fetch ?? fetch
   }
 
-  async ask(state: unknown, questions: JevQuestions): Promise<Record<string, number>> {
+  async ask(state: unknown, questions: JevQuestions): Promise<Record<string, JevAnswer>> {
     if (!this.apiKey) throw new Error("no Jev API key configured")
 
     const controller = new AbortController()

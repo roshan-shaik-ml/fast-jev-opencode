@@ -40,6 +40,7 @@
     "bench:savings": "node --experimental-strip-types bench/savings.mjs",
     "bench:baseline": "node --experimental-strip-types bench/baseline.mjs",
     "bench:replay": "node --experimental-strip-types --experimental-sqlite bench/replay.mjs",
+    "bench:ab": "node --experimental-strip-types --experimental-sqlite bench/ab.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

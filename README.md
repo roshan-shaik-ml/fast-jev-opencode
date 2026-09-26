@@ -205,9 +205,10 @@ restart. The shipped example is observe-only (`dryRun: true`).
 | `apiKey`                     | `""`       | Inline key (prefer `apiKeyEnv`)                                                |
 | `apiKeyEnv`                  | preset     | Environment variable holding the key                                           |
 | `apiKeyFile`                 | `""`       | File containing the key                                                        |
-| `keepCallThreshold`          | `0.5`      | Minimum probability for the call itself to stay                                |
-| `keepResultThreshold`        | `0.25`     | Minimum probability for its output to stay verbatim                            |
+| `keepCallThreshold`          | `0.25`     | Minimum probability for the call itself to stay                                |
+| `keepResultThreshold`        | `0.15`     | Minimum probability for its output to stay verbatim                            |
 | `keepThreshold`              | _unset_    | Legacy override: sets both thresholds to one value                             |
+| `questionStyle`              | `choice`   | `choice` asks one three-way question per call; `noul` asks two                 |
 | `preserveRecentMessages`     | `6`        | Newest messages never judged                                                   |
 | `maxStateTokens`             | `25000`    | State token ceiling                                                            |
 | `maxRequestTokens`           | `30000`    | State plus one batch of questions                                              |
@@ -338,6 +339,33 @@ been half removed.
 The evidence comparison on the same session is roughly a tie with plain truncation, which
 matches the independent replay quoted above. So install this for the safety - pairing
 preserved, text untouched, secrets redacted, failures failing open - not for a magic number.
+
+### Question shape and threshold calibration
+
+`npm run bench:ab` replays a real session against the live endpoint, once per configuration,
+and reports both what was saved and how much later-referenced content survived. Four arms on
+one 400-message session:
+
+```
+arm                saved  requests     ms   needed calls   evidence kept
+noul   0.50/0.25   34.9%         1   1451    165/206      1616/4060  (40%)
+choice 0.50/0.25   30.3%         1    619    171/206      1981/4060  (49%)
+noul   0.25/0.15   16.6%         1    608    182/206      2802/4060  (69%)
+choice 0.25/0.15   20.6%         1    827    182/206      2710/4060  (67%)
+```
+
+Two conclusions drove the shipped defaults:
+
+- **`choice` beats `noul`.** At matched thresholds it keeps more of what the session later
+  used, in half the latency, because one question replaces two.
+- **The thresholds were wrong.** On this traffic `noul` readings sat at 0.26-0.42 for calls and
+  0.09-0.21 for results, so the old `0.5 / 0.25` made `keep` **unreachable** - the defect
+
+  present here because the numbers had been borrowed rather than measured. At `0.25 / 0.15`
+  the same session gives up about fourteen points of saving to keep far more of what mattered.
+
+Defaults are therefore `questionStyle: "choice"` with `0.25 / 0.15`. Raise them if you want the
+savings back and accept the loss.
 
 ## Test
 

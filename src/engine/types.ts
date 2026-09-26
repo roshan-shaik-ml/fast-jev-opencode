@@ -56,10 +56,30 @@ export interface NoulQuestion {
   criteria?: { true?: string; false?: string }
 }
 
-export type JevQuestions = Record<string, NoulQuestion>
+/**
+ * A question with named options. Preferred over `noul` where the options are
+ * mutually exclusive: the probabilities are relative, so they cannot drift onto
+ * a scale of their own the way an independent `noul` reading can.
+ */
+export interface ChoiceQuestion {
+  type: "choice"
+  instructions: string
+  criteria: Record<string, string>
+}
+
+export type JevQuestion = NoulQuestion | ChoiceQuestion
+
+export type JevQuestions = Record<string, JevQuestion>
+
+export interface JevAnswer {
+  noul?: number
+  choice?: string
+  confidence?: number
+  probabilities?: Record<string, number>
+}
 
 export interface JevAsker {
-  ask(state: unknown, questions: JevQuestions): Promise<Record<string, number>>
+  ask(state: unknown, questions: JevQuestions): Promise<Record<string, JevAnswer>>
 }
 
 export interface Thresholds {

@@ -290,6 +290,7 @@ const baseCfg = {
   preserveRecentMessages: 6,
   keepThreshold: 0.5,
   truncateHeadChars: 300,
+  questionStyle: "noul",
   minResultChars: 0,
   rejudgeAfterMs: 600000,
   timeoutMs: 60000,

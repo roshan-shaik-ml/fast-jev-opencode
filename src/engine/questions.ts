@@ -53,6 +53,41 @@ export function questionsFor(call: ToolCall, previewChars = 0): JevQuestions {
   }
 }
 
+export type QuestionStyle = "noul" | "choice"
+
+/**
+ * One three-way question instead of two independent ones.
+ *
+ * `noul` readings are absolute and can sit low for every question at once, which
+ * is why a single threshold over them fails and why two had to be invented. A
+ * `choice` answers what to *do* with the call, with the options competing against
+ * each other, so no calibration is needed to read it.
+ */
+export function choiceQuestionFor(call: ToolCall, previewChars = 0): JevQuestions {
+  return {
+    [`decision_${call.slot}`]: {
+      type: "choice",
+      instructions: `Tool call ${call.slot} (${call.tool}, ${call.resultChars} characters of output) is in the conversation history. Decide what the next step still needs from it.${outputPreview(call, previewChars)}`,
+      criteria: {
+        keep: "Both the call and its full output are still needed, and re-running the tool would not reproduce the output.",
+        truncate:
+          "The call still matters, but only a short head of its output does. The rest can go.",
+        drop: "Neither the call nor its output matters for the next step; it is stale or superseded.",
+      },
+    },
+  }
+}
+
+export function questionsForStyle(
+  call: ToolCall,
+  style: QuestionStyle,
+  previewChars = 0,
+): JevQuestions {
+  return style === "choice"
+    ? choiceQuestionFor(call, previewChars)
+    : questionsFor(call, previewChars)
+}
+
 /**
  * Split candidates into batches that fit one request alongside the state. The
  * state is re-sent with every batch, so its size is charged to each one.
@@ -62,6 +97,7 @@ export function batchCalls(
   stateTokens: number,
   maxRequestTokens: number,
   previewChars = 0,
+  style: QuestionStyle = "noul",
 ): ToolCall[][] {
   const budget = maxRequestTokens - stateTokens - OVERHEAD_TOKENS
   const batches: ToolCall[][] = []
@@ -69,7 +105,7 @@ export function batchCalls(
   let used = 0
 
   for (const call of calls) {
-    const cost = estimateTokens(JSON.stringify(questionsFor(call, previewChars)))
+    const cost = estimateTokens(JSON.stringify(questionsForStyle(call, style, previewChars)))
     if (current.length > 0 && used + cost > budget) {
       batches.push(current)
       current = []

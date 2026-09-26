@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { collectCalls, prefilter } from "../src/engine/index.ts"
+import { answer } from "./stub.mjs"
 
 const args = process.argv.slice(2)
 const argOf = (name) => {
@@ -71,13 +72,6 @@ function loadMessages(sessionId) {
   return messages
 }
 
-function probability(name) {
-  const slot = Number(name.match(/_(\d+)$/)?.[1] ?? "1")
-  const bucket = slot % 3
-  if (name.startsWith("call_")) return bucket === 2 ? 0.2 : 0.9
-  return bucket === 0 ? 0.9 : 0.2
-}
-
 let requests = 0
 const server = createServer((req, res) => {
   let body = ""
@@ -86,8 +80,9 @@ const server = createServer((req, res) => {
     requests += 1
     const parsed = JSON.parse(body)
     const answers = {}
-    for (const name of Object.keys(parsed.questions ?? {}))
-      answers[name] = { noul: probability(name) }
+    for (const [name, question] of Object.entries(parsed.questions ?? {})) {
+      answers[name] = answer(name, question.type)
+    }
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ answers }))
   })

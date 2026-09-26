@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { collectCalls } from "../src/engine/index.ts"
 import { SOURCE, toTranscript, toV1Messages } from "./fixture.mjs"
+import { answer } from "./stub.mjs"
 
 const PRESERVE = 6
 const TRUNCATE_HEAD = 300
@@ -37,13 +38,6 @@ SOURCE.forEach((message, index) => {
 const neededIDs = new Set(needed.map((entry) => entry.callID))
 const totalNeededTokens = needed.reduce((sum, entry) => sum + entry.tokens.length, 0)
 
-function probability(name) {
-  const slot = Number(name.match(/_(\d+)$/)?.[1] ?? "1")
-  const bucket = slot % 3
-  if (name.startsWith("call_")) return bucket === 2 ? 0.2 : 0.9
-  return bucket === 0 ? 0.9 : 0.2
-}
-
 let requestCount = 0
 const server = createServer((req, res) => {
   let body = ""
@@ -53,7 +47,7 @@ const server = createServer((req, res) => {
     const parsed = JSON.parse(body)
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
-      if (question.type === "noul") answers[name] = { noul: probability(name) }
+      answers[name] = answer(name, question.type)
     }
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ answers }))
