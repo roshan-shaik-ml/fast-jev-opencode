@@ -7,8 +7,11 @@ import {
   buildState,
   collectCalls,
   decide,
+  DEFAULT_RULES,
   lacksKeepSignal,
+  prefilter,
   questionsFor,
+  type RuleSet,
   type CallAction,
   type CallAnswer,
   type Decision,
@@ -50,6 +53,10 @@ export interface Config {
   peekChars: number
   minScored: number
   removedCallStyle: RemovedCallStyle
+  inputPrice: number
+  cachedInputPrice: number
+  cacheAware: boolean
+  rules: RuleSet
   protectTools: string[]
   rejudgeAfterMs: number
   timeoutMs: number
@@ -96,6 +103,10 @@ const DEFAULTS = {
   peekChars: 200,
   minScored: 8,
   removedCallStyle: "stub" as RemovedCallStyle,
+  inputPrice: 0,
+  cachedInputPrice: 0,
+  cacheAware: false,
+  rules: { ...DEFAULT_RULES },
   protectTools: [] as string[],
   rejudgeAfterMs: 600000,
   timeoutMs: 30000,
@@ -253,6 +264,14 @@ export function loadConfig(): Config {
       file.removedCallStyle === "delete" || file.removedCallStyle === "stub"
         ? file.removedCallStyle
         : DEFAULTS.removedCallStyle,
+    inputPrice: pickNum(file.inputPrice, DEFAULTS.inputPrice, 0, 10000),
+    cachedInputPrice: pickNum(file.cachedInputPrice, DEFAULTS.cachedInputPrice, 0, 10000),
+    cacheAware: pickBool(file.cacheAware, DEFAULTS.cacheAware),
+    rules: {
+      duplicate: pickBool(file.rules?.duplicate, DEFAULTS.rules.duplicate),
+      superseded: pickBool(file.rules?.superseded, DEFAULTS.rules.superseded),
+      resolved: pickBool(file.rules?.resolved, DEFAULTS.rules.resolved),
+    },
     protectTools: Array.isArray(file.protectTools)
       ? file.protectTools.filter((t) => typeof t === "string")
       : DEFAULTS.protectTools,
@@ -335,10 +354,32 @@ export interface Plan {
   actions: Map<string, CallAction>
   calls: number
   candidates: number
+  ruleDrops: number
   requests: number
   stateTokens: number
   stage: string
   blocked: boolean
+  blockedReason?: "no-keep-signal" | "cache-cost"
+  /** Estimated Jev spend for this pass, in USD. Zero unless `inputPrice` is set. */
+  estimatedCostUsd: number
+}
+
+/** Characters from `index` onward — the part of the request a prune invalidates. */
+function transcriptCharsFrom(transcript: readonly TranscriptMessage[], index: number): number {
+  let total = 0
+  for (let i = index; i < transcript.length; i++) {
+    const message = transcript[i] as TranscriptMessage
+    total += message.text.length
+    for (const use of message.toolUses) {
+      try {
+        total += JSON.stringify(use.input).length
+      } catch {
+        total += 20
+      }
+    }
+    for (const result of message.toolResults ?? []) total += result.text.length
+  }
+  return total
 }
 
 export async function plan(
@@ -348,6 +389,8 @@ export async function plan(
 ): Promise<Plan> {
   const thresholds = resolveThresholds(cfg)
   const calls = collectCalls(transcript, cfg.preserveRecentMessages)
+  const byId = new Map(calls.map((call) => [call.id, call]))
+  const ruleHits = prefilter(calls, cfg.rules)
   const now = Date.now()
   pruneCache(now, cfg.rejudgeAfterMs)
 
@@ -362,6 +405,7 @@ export async function plan(
       !call.pinned &&
       !protectedTool(call.tool) &&
       call.resultChars >= cfg.minResultChars &&
+      !ruleHits.has(call.id) &&
       stale(call.id),
   )
 
@@ -372,12 +416,11 @@ export async function plan(
     const fitted = buildState(transcript, calls, {
       maxStateTokens: cfg.maxStateTokens,
       preserveRecentMessages: cfg.preserveRecentMessages,
-      peekChars: cfg.peekChars,
     })
     stateTokens = fitted.tokens
     stage = fitted.stage
-    for (const batch of batchCalls(needed, fitted.tokens, cfg.maxRequestTokens)) {
-      const questions = Object.assign({}, ...batch.map((call) => questionsFor(call)))
+    for (const batch of batchCalls(needed, fitted.tokens, cfg.maxRequestTokens, cfg.peekChars)) {
+      const questions = Object.assign({}, ...batch.map((call) => questionsFor(call, cfg.peekChars)))
       const answers = await asker.ask(fitted.state, questions)
       requests += 1
       for (const call of batch) {
@@ -397,29 +440,64 @@ export async function plan(
     return decide(call, answer, thresholds)
   })
 
-  const blocked = cfg.minScored > 0 && lacksKeepSignal(decisions, cfg.minScored)
-
   const actions = new Map<string, CallAction>()
-  if (!blocked) {
-    const byId = new Map(calls.map((call) => [call.id, call]))
-    for (const decision of decisions) {
-      if (decision.action === "keep") continue
-      const call = byId.get(decision.id)
-      if (!call) continue
-      if (call.pinned || protectedTool(call.tool) || call.resultChars < cfg.minResultChars) continue
-      actions.set(decision.id, decision.action)
-    }
+  const eligible = (call: ToolCall | undefined): call is ToolCall =>
+    Boolean(call) &&
+    !call!.pinned &&
+    !protectedTool(call!.tool) &&
+    call!.resultChars >= cfg.minResultChars
+
+  for (const id of ruleHits.keys()) {
+    const call = byId.get(id)
+    if (!eligible(call)) continue
+    actions.set(id, "drop_call")
   }
+  for (const decision of decisions) {
+    if (decision.action === "keep" || ruleHits.has(decision.id)) continue
+    const call = byId.get(decision.id)
+    if (!eligible(call)) continue
+    actions.set(decision.id, decision.action)
+  }
+
+  const keepSignalBlocked = cfg.minScored > 0 && lacksKeepSignal(decisions, cfg.minScored)
+
+  // A prune rewrites the prefix, so the provider re-reads the suffix at full
+  // price while the removed tokens were only worth the cached-read price. When
+  // prices are configured, refuse a pass that does not pay for itself.
+  const prunedChars = [...actions.keys()].reduce((sum, id) => {
+    const call = byId.get(id)
+    return sum + (call ? Math.max(0, call.resultChars - cfg.truncateHeadChars) : 0)
+  }, 0)
+  const firstIndex = [...actions.keys()].reduce(
+    (min, id) => Math.min(min, byId.get(id)?.messageIndex ?? Number.MAX_SAFE_INTEGER),
+    Number.MAX_SAFE_INTEGER,
+  )
+  const suffixTokens = Number.isFinite(firstIndex)
+    ? Math.ceil(transcriptCharsFrom(transcript, firstIndex) / 4)
+    : 0
+  const cacheBlocked =
+    cfg.cacheAware &&
+    cfg.inputPrice > 0 &&
+    prunedChars > 0 &&
+    Math.ceil(prunedChars / 4) * cfg.cachedInputPrice -
+      suffixTokens * Math.max(0, cfg.inputPrice - cfg.cachedInputPrice) <=
+      0
+
+  const blocked = keepSignalBlocked || cacheBlocked
+  if (blocked) actions.clear()
 
   return {
     decisions,
     actions,
     calls: calls.length,
     candidates: needed.length,
+    ruleDrops: ruleHits.size,
     requests,
     stateTokens,
     stage,
     blocked,
+    blockedReason: keepSignalBlocked ? "no-keep-signal" : cacheBlocked ? "cache-cost" : undefined,
+    estimatedCostUsd: (stateTokens * requests * cfg.inputPrice) / 1_000_000,
   }
 }
 

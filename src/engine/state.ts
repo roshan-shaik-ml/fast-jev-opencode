@@ -58,7 +58,6 @@ export function collectCalls(
 
 interface Stage {
   inputCap: number
-  peek: number
   abridgeOld: boolean
   collapseOld: boolean
   dropOldTextless: boolean
@@ -67,7 +66,6 @@ interface Stage {
 export interface StateOptions {
   maxStateTokens: number
   preserveRecentMessages: number
-  peekChars: number
   task?: string
 }
 
@@ -92,23 +90,18 @@ function renderText(text: string, pinned: boolean, stage: Stage): string {
 }
 
 /**
- * A call as Jev sees it. Results are summarised by size plus a head and tail
- * excerpt, so the judgement is made on what the output actually contained rather
- * than on a byte count. Inputs are redacted before they leave the process.
+ * A call as Jev sees it. Results are described by size and outcome; the excerpt
+ * that helps judge them travels with the question instead, so it is not re-sent
+ * with every batch. Inputs are redacted before they leave the process.
  */
 function renderCall(call: ToolCall, stage: Stage): StateToolCall {
-  const rendered: StateToolCall = {
+  return {
     n: call.slot,
     tool: call.tool,
     input: redactText(clip(JSON.stringify(redactInput(call.input)), stage.inputCap)),
     outcome: call.isError ? "error" : "ok",
     bytes: call.resultChars,
   }
-  if (stage.peek > 0 && call.resultChars > stage.peek * 2 + 16) {
-    rendered.head = redactText(call.resultText.slice(0, stage.peek))
-    rendered.tail = redactText(call.resultText.slice(-stage.peek))
-  }
-  return rendered
 }
 
 /**
@@ -147,7 +140,6 @@ export function buildState(
 
   const base: Stage = {
     inputCap: INPUT_CAPS[0],
-    peek: options.peekChars,
     abridgeOld: false,
     collapseOld: false,
     dropOldTextless: false,
@@ -156,17 +148,15 @@ export function buildState(
     [base, "full"],
     [{ ...base, inputCap: INPUT_CAPS[1] }, `inputs<=${INPUT_CAPS[1]}`],
     [{ ...base, inputCap: INPUT_CAPS[2] }, `inputs<=${INPUT_CAPS[2]}`],
-    [{ ...base, inputCap: INPUT_CAPS[2], peek: 0 }, "peeks dropped"],
-    [{ ...base, inputCap: INPUT_CAPS[2], peek: 0, abridgeOld: true }, "old texts abridged"],
+    [{ ...base, inputCap: INPUT_CAPS[2], abridgeOld: true }, "old texts abridged"],
     [
-      { ...base, inputCap: INPUT_CAPS[2], peek: 0, abridgeOld: true, collapseOld: true },
+      { ...base, inputCap: INPUT_CAPS[2], abridgeOld: true, collapseOld: true },
       "old messages collapsed",
     ],
     [
       {
         ...base,
         inputCap: INPUT_CAPS[2],
-        peek: 0,
         abridgeOld: true,
         collapseOld: true,
         dropOldTextless: true,

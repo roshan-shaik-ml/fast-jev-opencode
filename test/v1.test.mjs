@@ -13,6 +13,7 @@ process.env.TYPESAFE_API_KEY = "test-key"
 let answerer = () => 1
 let requestCount = 0
 let lastModel = null
+let lastQuestions = null
 
 const server = createServer((req, res) => {
   let body = ""
@@ -21,6 +22,7 @@ const server = createServer((req, res) => {
     requestCount += 1
     const parsed = JSON.parse(body)
     lastModel = parsed.model
+    lastQuestions = parsed.questions
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
       const p = answerer(name, question.type)
@@ -139,6 +141,11 @@ check("keep: message count unchanged", kept.length === 10, `got ${kept.length}`)
 check(
   "keep: tool outputs untouched",
   kept[1].parts[0].state.output.length === 5000 && kept[2].parts[0].state.output.length === 5000,
+)
+check(
+  "question carries an output preview",
+  typeof lastQuestions?.result_1?.instructions === "string" &&
+    lastQuestions.result_1.instructions.includes("Output preview:"),
 )
 
 console.log("\n[stub (default)]")
@@ -383,6 +390,70 @@ const withModel = fixture("withmodel")
 await transform({}, { messages: withModel })
 check("explicit model: sent as-is", lastModel === "jev-1.13.0", `got ${JSON.stringify(lastModel)}`)
 writeCfg()
+
+const mkTool = (callID, name, input, output) => ({
+  id: `${callID}-p`,
+  sessionID: "s",
+  messageID: "m",
+  type: "tool",
+  callID,
+  tool: name,
+  state: {
+    status: "completed",
+    input,
+    output,
+    title: name,
+    metadata: {},
+    time: { start: 1, end: 2 },
+  },
+})
+const tails = () => [
+  message("assistant", [text("t1")]),
+  message("user", [text("t2")]),
+  message("assistant", [text("t3")]),
+  message("user", [text("t4")]),
+  message("assistant", [text("t5")]),
+  message("user", [text("t6")]),
+]
+
+console.log("\n[prefilter: superseded read]")
+writeCfg({ minResultChars: 2000, rules: { duplicate: true, superseded: true, resolved: true } })
+answerer = () => 1
+requestCount = 0
+const superseded = [
+  message("user", [text("task")]),
+  message("assistant", [mkTool("s1", "read", { filePath: "src/a.ts" }, BIG)]),
+  message("assistant", [mkTool("s2", "edit", { filePath: "src/a.ts" }, "Applied 1 edit")]),
+  ...tails(),
+]
+await transform({}, { messages: superseded })
+const s1 = superseded.flatMap((m) => m.parts).find((p) => p.callID === "s1")
+check(
+  "prefilter: stale read cleared without a Jev request",
+  requestCount === 0,
+  `asked ${requestCount}`,
+)
+check("prefilter: stale read output cleared", s1.state.output.includes("fast-jev cleared"))
+
+console.log("\n[prefilter: duplicate call]")
+writeCfg()
+answerer = () => 1
+requestCount = 0
+const duplicated = [
+  message("user", [text("task")]),
+  message("assistant", [mkTool("d1", "read", { filePath: "src/b.ts" }, BIG)]),
+  message("assistant", [mkTool("d2", "read", { filePath: "src/b.ts" }, BIG)]),
+  ...tails(),
+]
+await transform({}, { messages: duplicated })
+const d1 = duplicated.flatMap((m) => m.parts).find((p) => p.callID === "d1")
+const d2 = duplicated.flatMap((m) => m.parts).find((p) => p.callID === "d2")
+check("prefilter: earlier duplicate cleared", d1.state.output.includes("fast-jev cleared"))
+check(
+  "prefilter: last occurrence survives",
+  d2.state.output.length === 5000,
+  `got ${d2.state.output.length}`,
+)
 
 console.log("\n[no-key fail-open]")
 delete process.env.TYPESAFE_API_KEY

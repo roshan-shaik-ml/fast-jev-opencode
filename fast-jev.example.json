@@ -12,6 +12,14 @@
   "peekChars": 200,
   "minScored": 8,
   "removedCallStyle": "stub",
+  "rules": {
+    "duplicate": true,
+    "superseded": false,
+    "resolved": true
+  },
+  "inputPrice": 0,
+  "cachedInputPrice": 0,
+  "cacheAware": false,
   "protectTools": [],
   "rejudgeAfterMs": 600000,
   "timeoutMs": 30000,

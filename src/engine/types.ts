@@ -73,8 +73,6 @@ export interface StateToolCall {
   input: string
   outcome: "ok" | "error"
   bytes: number
-  head?: string
-  tail?: string
 }
 
 export interface StateEntry {

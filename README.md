@@ -66,6 +66,14 @@ A candidate is a tool call that is not pinned (first message / newest
   judgement is made on what the output contained rather than on a byte count.
 - **Guarded:** a pass that scored `minScored` calls and kept none is refused outright — a
   blanket removal is a bad answer, not a decision, and the request goes out untouched.
+- **Free where provable:** the transcript sometimes proves a call is stale by itself — an
+  identical request made later, or an error an identical later request resolved. Those are
+  dropped with **zero** Jev requests. The `superseded` rule (a read modified by a later edit)
+  ships **off**: `bench:baseline` measured it costing more later-referenced evidence than it
+  saves requests.
+- **Cost-aware (optional):** set `inputPrice` / `cachedInputPrice` and `cacheAware: true` and a
+  prune is refused when the cache it invalidates costs more than the tokens it removes. Left
+  off by default because pricing varies by provider and contract.
 - **Shape-preserving:** a call Jev rates as no longer needed keeps its place with the output
   cut short (`removedCallStyle: "stub"`). Deleting it leaves the assistant's narration with no
   evidence behind it, and a model that sees that shape starts reporting work it never did —
@@ -202,6 +210,10 @@ restart. The shipped example is observe-only (`dryRun: true`).
 | `peekChars`              | `200`      | Head/tail excerpt of each result shown to Jev                                  |
 | `minScored`              | `8`        | Refuse a pass that scored this many calls and kept none                        |
 | `removedCallStyle`       | `"stub"`   | `"stub"` keeps a removed call with its output cut short; `"delete"` removes it |
+| `rules`                  | see below  | Free drops proved by the transcript, with no Jev request                       |
+| `inputPrice`             | `0`        | USD per million input tokens, for cost reporting (`0` = off)                   |
+| `cachedInputPrice`       | `0`        | USD per million cached input tokens                                            |
+| `cacheAware`             | `false`    | Refuse a prune that does not pay for itself at those prices                    |
 | `protectTools`           | `[]`       | Tool names whose calls/results are always kept                                 |
 | `rejudgeAfterMs`         | `600000`   | Re-score a call after this long; `0` re-scores every request                   |
 | `timeoutMs`              | `30000`    | Per-request deadline; a stalled endpoint fails open                            |
