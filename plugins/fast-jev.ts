@@ -40,7 +40,10 @@ interface Config {
   log: boolean
 }
 
-const PRESETS: Record<Exclude<Provider, "custom">, { baseUrl: string; model: string; apiKeyEnv: string }> = {
+const PRESETS: Record<
+  Exclude<Provider, "custom">,
+  { baseUrl: string; model: string; apiKeyEnv: string }
+> = {
   typesafe: {
     baseUrl: "https://api.typesafe.ai/v1/systemone",
     model: "jev-latest",
@@ -84,19 +87,53 @@ const DEFAULTS: Omit<Config, "provider" | "apiKeyEnv" | "baseUrl" | "model"> & {
 const CONFIG_PATH = join(homedir(), ".config", "opencode", "fast-jev.json")
 const ENV_PATH = join(homedir(), ".config", "opencode", ".env")
 
-let configError: string | null = null
+let configIssues: string[] = []
 let configWarned = false
 
+function stripJsonComments(input: string): string {
+  let out = ""
+  let inString = false
+  let escaped = false
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i] as string
+    if (inString) {
+      out += ch
+      if (escaped) escaped = false
+      else if (ch === "\\") escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+      out += ch
+      continue
+    }
+    if (ch === "/" && input[i + 1] === "/") {
+      while (i < input.length && input[i] !== "\n") i++
+      out += "\n"
+      continue
+    }
+    if (ch === "/" && input[i + 1] === "*") {
+      i += 2
+      while (i < input.length && !(input[i] === "*" && input[i + 1] === "/")) i++
+      i += 1
+      continue
+    }
+    out += ch
+  }
+  return out
+}
+
 function readConfigFile(): Partial<Config> {
-  configError = null
+  configIssues = []
   for (const path of [CONFIG_PATH, join(homedir(), ".config", "opencode", "fast-jev.jsonc")]) {
     try {
       const raw = readFileSync(path, "utf8")
-      const parsed = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, ""))
+      const parsed = JSON.parse(stripJsonComments(raw))
       if (parsed && typeof parsed === "object") return parsed as Partial<Config>
     } catch (error) {
       if ((error as { code?: string })?.code !== "ENOENT") {
-        configError = error instanceof Error ? error.message : String(error)
+        configIssues.push(error instanceof Error ? error.message : String(error))
       }
       continue
     }
@@ -135,8 +172,18 @@ function pickNum(value: unknown, fallback: number, min: number, max: number): nu
 
 function loadConfig(): Config {
   const file = readConfigFile()
-  const provider: Provider = pick(file.provider, DEFAULTS.provider)
-  const preset = provider === "custom" ? undefined : PRESETS[provider] ?? PRESETS.typesafe
+  const rawProvider = file.provider
+  const provider: Provider =
+    rawProvider === "typesafe" ||
+    rawProvider === "zen" ||
+    rawProvider === "openrouter" ||
+    rawProvider === "custom"
+      ? rawProvider
+      : DEFAULTS.provider
+  if (rawProvider !== undefined && rawProvider !== provider) {
+    configIssues.push(`unknown provider "${String(rawProvider)}"; using "${provider}"`)
+  }
+  const preset = provider === "custom" ? undefined : (PRESETS[provider] ?? PRESETS.typesafe)
   return {
     enabled: pickBool(file.enabled, DEFAULTS.enabled),
     dryRun: pickBool(file.dryRun, DEFAULTS.dryRun),
@@ -147,13 +194,25 @@ function loadConfig(): Config {
     baseUrl: pick(file.baseUrl, preset?.baseUrl ?? ""),
     model: pick(file.model, preset?.model ?? ""),
     keepThreshold: pickNum(file.keepThreshold, DEFAULTS.keepThreshold, 0, 1),
-    preserveRecentMessages: pickNum(file.preserveRecentMessages, DEFAULTS.preserveRecentMessages, 0, 10000),
+    preserveRecentMessages: pickNum(
+      file.preserveRecentMessages,
+      DEFAULTS.preserveRecentMessages,
+      0,
+      10000,
+    ),
     maxStateTokens: pickNum(file.maxStateTokens, DEFAULTS.maxStateTokens, 1, 1000000),
     maxRequestTokens: pickNum(file.maxRequestTokens, DEFAULTS.maxRequestTokens, 1, 1000000),
     truncateHeadChars: pickNum(file.truncateHeadChars, DEFAULTS.truncateHeadChars, 0, 1000000),
     minResultChars: pickNum(file.minResultChars, DEFAULTS.minResultChars, 0, 1000000),
-    protectTools: Array.isArray(file.protectTools) ? file.protectTools.filter((t) => typeof t === "string") : DEFAULTS.protectTools,
-    rejudgeAfterMs: pickNum(file.rejudgeAfterMs, DEFAULTS.rejudgeAfterMs, 0, Number.MAX_SAFE_INTEGER),
+    protectTools: Array.isArray(file.protectTools)
+      ? file.protectTools.filter((t) => typeof t === "string")
+      : DEFAULTS.protectTools,
+    rejudgeAfterMs: pickNum(
+      file.rejudgeAfterMs,
+      DEFAULTS.rejudgeAfterMs,
+      0,
+      Number.MAX_SAFE_INTEGER,
+    ),
     timeoutMs: pickNum(file.timeoutMs, DEFAULTS.timeoutMs, 1000, 300000),
     log: pickBool(file.log, DEFAULTS.log),
   }
@@ -184,7 +243,6 @@ interface OpenCodePart {
     input?: Record<string, unknown>
     output?: string
     error?: string
-    time?: { compacted?: number }
   }
 }
 
@@ -258,7 +316,9 @@ function pruneCache(now: number, ttl: number): void {
   for (const [key, entry] of cache) {
     if (ttl <= 0 || now - entry.at > ttl) cache.delete(key)
   }
-}interface Plan {
+}
+
+interface Plan {
   actions: Map<string, CallAction>
   calls: number
   candidates: number
@@ -266,11 +326,7 @@ function pruneCache(now: number, ttl: number): void {
   stateTokens: number
 }
 
-async function plan(
-  messages: OpenCodeMessage[],
-  cfg: Config,
-  asker: JevAsker,
-): Promise<Plan> {
+async function plan(messages: OpenCodeMessage[], cfg: Config, asker: JevAsker): Promise<Plan> {
   const options = resolveOptions({
     keepThreshold: cfg.keepThreshold,
     preserveRecentMessages: cfg.preserveRecentMessages,
@@ -397,9 +453,9 @@ export const FastJev: Plugin = async ({ client }) => {
     "experimental.chat.messages.transform": async (_input, output) => {
       try {
         const cfg = loadConfig()
-        if (configError && !configWarned) {
+        if (configIssues.length > 0 && !configWarned) {
           configWarned = true
-          log("warn", `config file failed to parse; using defaults: ${configError}`)
+          log("warn", `config: ${configIssues.join("; ")}`)
         }
         if (!cfg.enabled) return
         const messages = output.messages as unknown as OpenCodeMessage[]

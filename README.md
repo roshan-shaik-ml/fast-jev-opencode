@@ -1,5 +1,7 @@
 # fast-jev-opencode
 
+[![CI](https://github.com/roshan-shaik-ml/fast-jev-opencode/actions/workflows/ci.yml/badge.svg)](https://github.com/roshan-shaik-ml/fast-jev-opencode/actions/workflows/ci.yml)
+
 Verbatim context pruning for [OpenCode](https://opencode.ai) **v1**, powered by
 [TypeSafe Jev](https://docs.typesafe.ai). Instead of summarizing old turns, it
 scores every tool call and tool result with Jev and removes or truncates only
@@ -27,7 +29,7 @@ tool is not in `protectTools`.
 
 - **Non-destructive:** persisted history, the UI, and stored sessions are never
   modified. Only the request sent to the model is changed. (OpenCode also runs
-  this hook on the request that *builds* a `/compact` summary, so that request is
+  this hook on the request that _builds_ a `/compact` summary, so that request is
   pruned too; the stored transcript still is not.)
 - **Verbatim:** user and assistant text is never rewritten. Only tool calls and
   tool outputs are dropped or truncated.
@@ -48,9 +50,7 @@ OpenCode fetches the plugin and its dependency for you. Add it to
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": [
-    "fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git"
-  ]
+  "plugin": ["fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git"]
 }
 ```
 
@@ -63,9 +63,10 @@ opencode plugin fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-je
 
 ### Option B - local file
 
-OpenCode v1 loads only top-level `*.ts` / `*.js` files in
-`~/.config/opencode/plugins/`; it does **not** recurse into subfolders. Install
-the dependency at the config root, then drop the plugin file in place:
+OpenCode v1 loads only top-level `*.ts` / `*.js` files in the global plugin
+directory (`~/.config/opencode/plugin/` or `~/.config/opencode/plugins/`); it
+does **not** recurse into subfolders. Install the dependency at the config root,
+then drop the plugin file in place:
 
 ```sh
 cd ~/.config/opencode
@@ -151,43 +152,45 @@ request unchanged.
 `~/.config/opencode/fast-jev.json` is re-read on every request, so edits apply
 without a restart. The shipped example is observe-only (`dryRun: true`).
 
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `enabled` | `true` | Master switch |
-| `dryRun` | `true` | Score and log, but do not rewrite the request |
-| `provider` | `typesafe` | `typesafe`, `zen`, `openrouter`, or `custom` |
-| `baseUrl` | preset | System One endpoint (required for `custom`) |
-| `model` | preset | Jev model id |
-| `apiKey` | `""` | Inline key (prefer `apiKeyEnv`) |
-| `apiKeyEnv` | preset | Environment variable holding the key |
-| `apiKeyFile` | `""` | File containing the key |
-| `keepThreshold` | `0.5` | Minimum probability for a call or result to stay |
-| `preserveRecentMessages` | `6` | Newest messages never judged |
-| `maxStateTokens` | `25000` | State token ceiling |
-| `maxRequestTokens` | `30000` | State plus one batch of questions |
-| `truncateHeadChars` | `300` | Head kept when a result is truncated |
-| `minResultChars` | `2000` | Results below this are never candidates |
-| `protectTools` | `[]` | Tool names whose calls/results are always kept |
-| `rejudgeAfterMs` | `600000` | Re-score a call after this long; `0` re-scores every request |
-| `timeoutMs` | `30000` | Per-request deadline; a stalled endpoint fails open |
-| `log` | `true` | Structured logging via the OpenCode client |
+| Option                   | Default    | Meaning                                                      |
+| ------------------------ | ---------- | ------------------------------------------------------------ |
+| `enabled`                | `true`     | Master switch                                                |
+| `dryRun`                 | `true`     | Score and log, but do not rewrite the request                |
+| `provider`               | `typesafe` | `typesafe`, `zen`, `openrouter`, or `custom`                 |
+| `baseUrl`                | preset     | System One endpoint (required for `custom`)                  |
+| `model`                  | preset     | Jev model id                                                 |
+| `apiKey`                 | `""`       | Inline key (prefer `apiKeyEnv`)                              |
+| `apiKeyEnv`              | preset     | Environment variable holding the key                         |
+| `apiKeyFile`             | `""`       | File containing the key                                      |
+| `keepThreshold`          | `0.5`      | Minimum probability for a call or result to stay             |
+| `preserveRecentMessages` | `6`        | Newest messages never judged                                 |
+| `maxStateTokens`         | `25000`    | State token ceiling                                          |
+| `maxRequestTokens`       | `30000`    | State plus one batch of questions                            |
+| `truncateHeadChars`      | `300`      | Head kept when a result is truncated                         |
+| `minResultChars`         | `2000`     | Results below this are never candidates                      |
+| `protectTools`           | `[]`       | Tool names whose calls/results are always kept               |
+| `rejudgeAfterMs`         | `600000`   | Re-score a call after this long; `0` re-scores every request |
+| `timeoutMs`              | `30000`    | Per-request deadline; a stalled endpoint fails open          |
+| `log`                    | `true`     | Structured logging via the OpenCode client                   |
 
 Provider presets:
 
-| provider | endpoint | model | key |
-| --- | --- | --- | --- |
-| `typesafe` | `api.typesafe.ai/v1/systemone` | `jev-latest` | `TYPESAFE_API_KEY` |
-| `zen` | `opencode.ai/zen/v1/systemone` | `jev-1.13-free` | `OPENCODE_API_KEY` |
-| `openrouter` | `openrouter.ai/api/v1/systemone` | `typesafe/jev-1.13` | `OPENROUTER_API_KEY` |
-| `custom` | *required* | *required* | via `apiKey` / `apiKeyEnv` |
+| provider     | endpoint                         | model               | key                        |
+| ------------ | -------------------------------- | ------------------- | -------------------------- |
+| `typesafe`   | `api.typesafe.ai/v1/systemone`   | `jev-latest`        | `TYPESAFE_API_KEY`         |
+| `zen`        | `opencode.ai/zen/v1/systemone`   | `jev-1.13-free`     | `OPENCODE_API_KEY`         |
+| `openrouter` | `openrouter.ai/api/v1/systemone` | `typesafe/jev-1.13` | `OPENROUTER_API_KEY`       |
+| `custom`     | _required_                       | _required_          | via `apiKey` / `apiKeyEnv` |
 
 ## Test
 
 Offline; no network and no key. The harness starts a local mock System One
-endpoint and drives the plugin's hook end to end.
+endpoint and drives the plugin's hook end to end. Requires Node >= 22.6 (the
+test runner uses `--experimental-strip-types`).
 
 ```sh
 npm test
+npm run format:check
 ```
 
 ## Compatibility
@@ -199,6 +202,8 @@ OpenCode V2 uses a different plugin API and is not supported by this port.
 
 
 - Decisions: [TypeSafe Jev](https://docs.typesafe.ai)
+
+See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for the upstream license notice.
 
 ## License
 

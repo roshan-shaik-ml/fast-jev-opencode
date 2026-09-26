@@ -22,7 +22,7 @@ const server = createServer((req, res) => {
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
       const p = answerer(name, question.type)
-      if (question.type === "noul") answers[name] = { noul: p }
+      if (question.type === "noul" && typeof p === "number") answers[name] = { noul: p }
     }
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ answers }))
@@ -72,11 +72,35 @@ function tool(callID, name, output, status = "completed") {
   const state =
     status === "error"
       ? { status, input: { q: callID }, error: output, time: { start: 1, end: 2 } }
-      : { status, input: { q: callID }, output, title: "", metadata: {}, time: { start: 1, end: 2 } }
-  return { id: `${callID}-p`, sessionID: "s", messageID: "m", type: "tool", callID, tool: name, state }
+      : {
+          status,
+          input: { q: callID },
+          output,
+          title: "",
+          metadata: {},
+          time: { start: 1, end: 2 },
+        }
+  return {
+    id: `${callID}-p`,
+    sessionID: "s",
+    messageID: "m",
+    type: "tool",
+    callID,
+    tool: name,
+    state,
+  }
 }
-const text = (value) => ({ id: `t${Math.random()}`, sessionID: "s", messageID: "m", type: "text", text: value })
-const message = (role, parts) => ({ info: { id: `m${Math.random()}`, sessionID: "s", role }, parts })
+const text = (value) => ({
+  id: `t${Math.random()}`,
+  sessionID: "s",
+  messageID: "m",
+  type: "text",
+  text: value,
+})
+const message = (role, parts) => ({
+  info: { id: `m${Math.random()}`, sessionID: "s", role },
+  parts,
+})
 const BIG = "X".repeat(5000)
 
 function fixture(tag) {
@@ -202,6 +226,101 @@ check("timeout: returns within 5s", elapsed < 5000, `took ${elapsed}ms`)
 hang.closeAllConnections?.()
 hang.close()
 writeCfg({ baseUrl: `http://127.0.0.1:${port}`, timeoutMs: 30000 })
+
+console.log("\n[pinning]")
+answerer = () => 0
+const pinned = fixture("pin")
+pinned[8] = message("assistant", [tool("pin-8", "read", BIG)])
+await transform({}, { messages: pinned })
+const pinParts = pinned.flatMap((m) => m.parts).filter((p) => p.type === "tool")
+check(
+  "pinning: call inside newest window kept",
+  pinParts.some((p) => p.callID === "pin-8" && p.state.output.length === 5000),
+)
+check(
+  "pinning: calls outside window dropped",
+  !pinParts.some((p) => p.callID === "pin-1" || p.callID === "pin-2" || p.callID === "pin-3"),
+)
+
+console.log("\n[preserveRecentMessages]")
+writeCfg({ preserveRecentMessages: 10 })
+answerer = () => 0
+requestCount = 0
+const allPinned = fixture("allpin")
+const allPinnedBefore = JSON.stringify(allPinned)
+await transform({}, { messages: allPinned })
+check("all pinned: nothing pruned", JSON.stringify(allPinned) === allPinnedBefore)
+check("all pinned: no Jev request", requestCount === 0, `got ${requestCount}`)
+writeCfg()
+
+console.log("\n[protectTools]")
+writeCfg({ protectTools: ["bash"] })
+answerer = () => 0
+const protectedMsgs = fixture("prot")
+await transform({}, { messages: protectedMsgs })
+const protectedParts = protectedMsgs.flatMap((m) => m.parts).filter((p) => p.type === "tool")
+check(
+  "protectTools: bash call kept",
+  protectedParts.some((p) => p.callID === "prot-2"),
+)
+check("protectTools: other calls dropped", !protectedParts.some((p) => p.callID === "prot-1"))
+writeCfg()
+
+console.log("\n[pending state]")
+answerer = () => 0
+const pendingMsgs = fixture("pend")
+pendingMsgs[1] = message("assistant", [
+  {
+    id: "pend-1-p",
+    sessionID: "s",
+    messageID: "m",
+    type: "tool",
+    callID: "pend-1",
+    tool: "read",
+    state: { status: "running", input: {}, time: { start: 1 } },
+  },
+])
+const pendingBefore = JSON.stringify(pendingMsgs[1])
+await transform({}, { messages: pendingMsgs })
+check("pending part untouched", JSON.stringify(pendingMsgs[1]) === pendingBefore)
+
+console.log("\n[partial answers]")
+answerer = (name) => (name.startsWith("call_") ? 0 : undefined)
+requestCount = 0
+const partial = fixture("part")
+const partialBefore = JSON.stringify(partial)
+await transform({}, { messages: partial })
+check(
+  "partial answers: missing result answer falls back to keep",
+  JSON.stringify(partial) === partialBefore,
+)
+check("partial answers: request still made", requestCount > 0, `got ${requestCount}`)
+
+console.log("\n[unfittable state]")
+writeCfg({ maxStateTokens: 50, maxRequestTokens: 60 })
+answerer = () => 0
+requestCount = 0
+const huge = fixture("huge")
+const hugeBefore = JSON.stringify(huge)
+await transform({}, { messages: huge })
+check("unfittable history: fail-open untouched", JSON.stringify(huge) === hugeBefore)
+check("unfittable history: no request sent", requestCount === 0, `got ${requestCount}`)
+writeCfg()
+
+console.log("\n[multi-batch]")
+writeCfg({ maxStateTokens: 3000, maxRequestTokens: 3600 })
+answerer = () => 0
+requestCount = 0
+const many = [message("user", [text("task")])]
+for (let i = 0; i < 40; i++) many.push(message("assistant", [tool(`mb-${i}`, "read", BIG)]))
+for (let i = 0; i < 6; i++) many.push(message("assistant", [text(`tail ${i}`)]))
+await transform({}, { messages: many })
+check("multi-batch: split into several requests", requestCount >= 2, `got ${requestCount}`)
+check(
+  "multi-batch: all candidate calls dropped",
+  !many.flatMap((m) => m.parts).some((p) => p.type === "tool"),
+)
+writeCfg()
 
 console.log("\n[no-key fail-open]")
 delete process.env.TYPESAFE_API_KEY

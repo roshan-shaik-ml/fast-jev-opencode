@@ -8,6 +8,17 @@
     ".": "./plugins/fast-jev.ts"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git"
+  },
+  "homepage": "https://github.com/roshan-shaik-ml/fast-jev-opencode#readme",
+  "bugs": {
+    "url": "https://github.com/roshan-shaik-ml/fast-jev-opencode/issues"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
   "keywords": [
     "opencode",
     "opencode-plugin",
@@ -17,10 +28,15 @@
     "context"
   ],
   "scripts": {
-    "test": "node --experimental-strip-types fast-jev.test.mjs"
+    "test": "node --experimental-strip-types fast-jev.test.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@opencode-ai/plugin": "^1.18.32",
 
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2"
   }
 }
