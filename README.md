@@ -34,31 +34,51 @@ outgoing request -> map OpenCode tool parts to the library message model
 
 ## Install
 
-```sh
-git clone https://github.com/<owner>/fast-jev-opencode.git \
-  ~/.config/opencode/plugins/fast-jev-opencode
-cd ~/.config/opencode/plugins/fast-jev-opencode
-npm install
-cp fast-jev.example.json ../fast-jev.json
+### Option A - one command (recommended)
+
+OpenCode fetches the plugin and its dependency for you. Add it to
+`~/.config/opencode/opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git"
+  ]
+}
 ```
 
-OpenCode loads plugins from `~/.config/opencode/plugins/`. The plugin resolves
+Or let the CLI edit the config for you:
 
-the config root as well:
+```sh
+opencode plugin fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git
+```
+
+### Option B - local file
+
+OpenCode v1 loads only top-level `*.ts` / `*.js` files in
+`~/.config/opencode/plugins/`; it does **not** recurse into subfolders. Install
+the dependency at the config root, then drop the plugin file in place:
 
 ```sh
 cd ~/.config/opencode
 
+curl -fsSL -o plugins/fast-jev.ts \
+  https://raw.githubusercontent.com/roshan-shaik-ml/fast-jev-opencode/main/plugins/fast-jev.ts
 ```
 
-Provide the Jev key (never commit it) either in the environment of the OpenCode
-server or in `~/.config/opencode/.env`:
+### Configure and restart
 
 ```sh
-TYPESAFE_API_KEY=...
+cd ~/.config/opencode
+curl -fsSL -o fast-jev.json \
+  https://raw.githubusercontent.com/roshan-shaik-ml/fast-jev-opencode/main/fast-jev.example.json
+echo 'TYPESAFE_API_KEY=...' >> .env
 ```
 
-Then restart OpenCode. Without a key the plugin stands down and logs a warning.
+Then restart OpenCode. It starts in `dryRun` mode, so nothing is pruned until
+you set `"dryRun": false` in `fast-jev.json`. Without a key the plugin stands
+down and logs a warning.
 
 ## Configure
 
