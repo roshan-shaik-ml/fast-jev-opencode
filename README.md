@@ -67,18 +67,77 @@ curl -fsSL -o plugins/fast-jev.ts \
   https://raw.githubusercontent.com/roshan-shaik-ml/fast-jev-opencode/main/plugins/fast-jev.ts
 ```
 
-### Configure and restart
+### Finish setup
+
+1. Add the plugin config file:
+
+   ```sh
+   cd ~/.config/opencode
+   curl -fsSL -o fast-jev.json \
+     https://raw.githubusercontent.com/roshan-shaik-ml/fast-jev-opencode/main/fast-jev.example.json
+   ```
+
+2. Add your Jev key - see [TypeSafe API key](#typesafe-api-key).
+
+3. Restart OpenCode. It starts in `dryRun` mode, so nothing is pruned until you
+   set `"dryRun": false` in `fast-jev.json`.
+
+## TypeSafe API key
+
+The plugin needs a Jev key. Create one in the TypeSafe console at
+<https://console.typesafe.ai>, then give it to the plugin.
+
+`apiKeyEnv` (default `TYPESAFE_API_KEY`) is the environment-variable **name** the
+plugin looks up. The key is resolved in this order, first hit wins:
+
+1. `apiKey` in `~/.config/opencode/fast-jev.json` (inline; not recommended)
+2. the `TYPESAFE_API_KEY` environment variable of the **OpenCode server process**
+3. a `TYPESAFE_API_KEY=...` line in `~/.config/opencode/.env` (easiest)
+4. the contents of the file named by `apiKeyFile`
+
+### Option 1 - the `.env` file (recommended)
+
+`~/.config/opencode/.env` is read on every request, so `fast-jev.json` never has
+to hold a secret. Create the file (or append a line):
 
 ```sh
-cd ~/.config/opencode
-curl -fsSL -o fast-jev.json \
-  https://raw.githubusercontent.com/roshan-shaik-ml/fast-jev-opencode/main/fast-jev.example.json
-echo 'TYPESAFE_API_KEY=...' >> .env
+printf 'TYPESAFE_API_KEY=your-key-here\n' >> ~/.config/opencode/.env
 ```
 
-Then restart OpenCode. It starts in `dryRun` mode, so nothing is pruned until
-you set `"dryRun": false` in `fast-jev.json`. Without a key the plugin stands
-down and logs a warning.
+Keep `.env` out of version control.
+
+### Option 2 - the server environment
+
+Set the variable before starting OpenCode:
+
+```sh
+# macOS / Linux
+export TYPESAFE_API_KEY=your-key-here
+opencode
+```
+
+```powershell
+# Windows PowerShell
+$env:TYPESAFE_API_KEY = "your-key-here"; opencode
+```
+
+### Option 3 - inline in the config
+
+Only if you cannot use an environment variable. Add the key to
+`~/.config/opencode/fast-jev.json`:
+
+```json
+{ "apiKey": "your-key-here" }
+```
+
+### Using another provider
+
+Set `provider` in `fast-jev.json` to `zen` or `openrouter` and supply that
+provider's key instead (`OPENCODE_API_KEY` or `OPENROUTER_API_KEY`). For anything
+else, use `provider: "custom"` with `baseUrl`, `model`, and `apiKeyEnv`.
+
+Without a valid key the plugin fails open: it logs a warning and sends the
+request unchanged.
 
 ## Configure
 
