@@ -29,6 +29,8 @@
   ],
   "scripts": {
     "test": "node --experimental-strip-types fast-jev.test.mjs",
+    "bench": "node --experimental-strip-types bench/benchmark.mjs",
+    "bench:savings": "node --experimental-strip-types bench/savings.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

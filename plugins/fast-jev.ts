@@ -84,8 +84,13 @@ const DEFAULTS: Omit<Config, "provider" | "apiKeyEnv" | "baseUrl" | "model"> & {
   log: true,
 }
 
-const CONFIG_PATH = join(homedir(), ".config", "opencode", "fast-jev.json")
-const ENV_PATH = join(homedir(), ".config", "opencode", ".env")
+const CONFIG_CANDIDATES = process.env.FAST_JEV_CONFIG
+  ? [process.env.FAST_JEV_CONFIG]
+  : [
+      join(homedir(), ".config", "opencode", "fast-jev.json"),
+      join(homedir(), ".config", "opencode", "fast-jev.jsonc"),
+    ]
+const ENV_PATH = process.env.FAST_JEV_ENV || join(homedir(), ".config", "opencode", ".env")
 
 let configIssues: string[] = []
 let configWarned = false
@@ -126,7 +131,7 @@ function stripJsonComments(input: string): string {
 
 function readConfigFile(): Partial<Config> {
   configIssues = []
-  for (const path of [CONFIG_PATH, join(homedir(), ".config", "opencode", "fast-jev.jsonc")]) {
+  for (const path of CONFIG_CANDIDATES) {
     try {
       const raw = readFileSync(path, "utf8")
       const parsed = JSON.parse(stripJsonComments(raw))
@@ -294,7 +299,7 @@ function toJevMessages(messages: OpenCodeMessage[]): JevMessage[] {
 function truncatedResultText(text: string, isError: boolean, headChars: number): string {
   if (text.length <= headChars + 120) return text
   const head = headChars > 0 ? `${text.slice(0, headChars)}\n` : ""
-  return `${head}[fast-jev truncated ${text.length - headChars} chars of this tool result${
+
     isError ? " (error)" : ""
   }; re-run the tool if needed]`
 }
@@ -468,8 +473,8 @@ export const FastJev: Plugin = async ({ client }) => {
         }
         const asker = new JevClient({
           apiKey,
-          model: cfg.model,
-          baseUrl: cfg.baseUrl,
+          model: cfg.model || undefined,
+          baseUrl: cfg.baseUrl || undefined,
           fetch: (input, init) => {
             const controller = new AbortController()
             const timer = setTimeout(() => controller.abort(), cfg.timeoutMs)

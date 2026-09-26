@@ -1,17 +1,18 @@
 import { createServer } from "node:http"
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 
 const home = mkdtempSync(join(tmpdir(), "fast-jev-test-"))
-mkdirSync(join(home, ".config", "opencode"), { recursive: true })
-process.env.USERPROFILE = home
-process.env.HOME = home
+const cfgPath = join(home, "fast-jev.json")
+process.env.FAST_JEV_CONFIG = cfgPath
+process.env.FAST_JEV_ENV = join(home, ".env")
 process.env.TYPESAFE_API_KEY = "test-key"
 
 let answerer = () => 1
 let requestCount = 0
+let lastModel = null
 
 const server = createServer((req, res) => {
   let body = ""
@@ -19,6 +20,7 @@ const server = createServer((req, res) => {
   req.on("end", () => {
     requestCount += 1
     const parsed = JSON.parse(body)
+    lastModel = parsed.model
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
       const p = answerer(name, question.type)
@@ -47,10 +49,7 @@ const baseCfg = {
 }
 
 function writeCfg(overrides = {}) {
-  writeFileSync(
-    join(home, ".config", "opencode", "fast-jev.json"),
-    JSON.stringify({ ...baseCfg, ...overrides }),
-  )
+  writeFileSync(cfgPath, JSON.stringify({ ...baseCfg, ...overrides }))
 }
 
 writeCfg()
@@ -158,7 +157,7 @@ const tools = truncated.flatMap((m) => m.parts).filter((p) => p.type === "tool")
 check("drop_result: tool parts kept", tools.length === 3, `got ${tools.length}`)
 check(
   "drop_result: outputs truncated with note",
-  tools.every((p) => p.state.output.includes("fast-jev truncated")),
+
 )
 check(
   "drop_result: head preserved",
@@ -180,7 +179,8 @@ const errTool = errMessages
   .find((p) => p.type === "tool" && p.callID === "err-1")
 check(
   "error result: truncated with (error) note",
-  errTool.state.error.includes("fast-jev truncated") && errTool.state.error.includes("(error)"),
+
+    errTool.state.error.includes("(error)"),
 )
 
 console.log("\n[cache]")
@@ -320,6 +320,24 @@ check(
   "multi-batch: all candidate calls dropped",
   !many.flatMap((m) => m.parts).some((p) => p.type === "tool"),
 )
+writeCfg()
+
+console.log("\n[model defaulting]")
+writeCfg()
+answerer = () => 1
+requestCount = 0
+const noModel = fixture("nomodel")
+await transform({}, { messages: noModel })
+check(
+  "custom provider without model: sends default model",
+  lastModel === "jev-latest",
+  `got ${JSON.stringify(lastModel)}`,
+)
+writeCfg({ model: "jev-1.13.0" })
+requestCount = 0
+const withModel = fixture("withmodel")
+await transform({}, { messages: withModel })
+check("explicit model: sent as-is", lastModel === "jev-1.13.0", `got ${JSON.stringify(lastModel)}`)
 writeCfg()
 
 console.log("\n[no-key fail-open]")

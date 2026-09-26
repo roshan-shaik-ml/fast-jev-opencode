@@ -182,6 +182,62 @@ Provider presets:
 | `openrouter` | `openrouter.ai/api/v1/systemone` | `typesafe/jev-1.13` | `OPENROUTER_API_KEY`       |
 | `custom`     | _required_                       | _required_          | via `apiKey` / `apiKeyEnv` |
 
+## Benchmark
+
+Two scripts, both runnable without a key (they stub Jev). Add `-- --live` and set
+`TYPESAFE_API_KEY` to score against the real endpoint.
+
+```sh
+npm run bench          # parity against the upstream Claude Code engine
+npm run bench:savings  # token savings, with and without Jev
+```
+
+### Parity with the Claude Code port
+
+`bench/benchmark.mjs` feeds an identical transcript to the upstream engine
+
+identical set of Jev answers:
+
+```
+transcript: 31 messages, 24 tool calls, 98478 chars
+parity      actions identical: true (24/24)
+            chars after identical: true
+            message count identical: true
+cache       second request: 0 jev request(s)
+overhead    no eligible calls: 1 ms (mapping only, no Jev call)
+```
+
+Same decisions and same reduction as the Claude Code port; the adapter adds
+milliseconds.
+
+### Token savings, with and without Jev
+
+`bench/savings.mjs` replays a small realistic task - fix a failing `/login` test -
+and measures the tokens in the outgoing request before and after pruning.
+
+```
+transcript     14 messages, 6 tool calls
+without Jev    1358 tokens
+
+with Jev, by keepThreshold:
+  threshold   tokens   saved     actions
+  0.50           71    - 94.8%   keep=0 drop_result=0 drop_call=6
+  0.30          476    - 64.9%   keep=2 drop_result=1 drop_call=3
+  0.15          891    - 34.4%   keep=4 drop_result=2 drop_call=0
+```
+
+Example run against the live TypeSafe endpoint. Three threshold passes cost **one**
+Jev request: decisions are cached and re-decided locally when the threshold
+changes.
+
+Note that `keepThreshold` trades savings against recall. At the upstream default
+of `0.5` this transcript loses everything, including the edit and the passing test
+run; at `0.15` every call is kept and only two bulky results are truncated. Tune
+it against your own traffic, starting low.
+
+Tokens are estimated with the same estimator the plugin uses to plan requests,
+not provider-billed tokens.
+
 ## Test
 
 Offline; no network and no key. The harness starts a local mock System One
