@@ -273,6 +273,27 @@ threshold changes.
 Tokens are estimated with the same estimator the plugin uses to plan requests, not
 provider-billed tokens.
 
+### Selection vs plain truncation
+
+`npm run bench:baseline` runs the same transcript through the plugin and through uniform
+head+tail truncation **equalised to the same retained size**, then scores each on how much of
+the content the session later referred to it destroyed:
+
+```
+6 calls eligible | 5 hold something referred to later (23 evidence tokens)
+pool        ours 2193 chars | head+tail 2191 chars (equalised at 65.1%)
+
+            needed calls intact   evidence tokens kept
+ours            4/5                   19/23
+head+tail       2/5                   17/23
+```
+
+Selection wins on this fixture. That is one small fixture with stubbed answers, not a
+statistical claim - an independent replay over real Claude Code sessions found smart selectors
+barely beat head+tail at equal size (upstream
+
+run against your own transcripts, not a settled result.
+
 ## Test
 
 Offline; no network and no key. Each suite starts a local mock System One endpoint and drives

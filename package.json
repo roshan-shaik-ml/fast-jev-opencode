@@ -31,6 +31,7 @@
     "test": "node --experimental-strip-types test/v1.test.mjs && node --experimental-strip-types test/v2.test.mjs",
     "bench": "node --experimental-strip-types bench/benchmark.mjs",
     "bench:savings": "node --experimental-strip-types bench/savings.mjs",
+    "bench:baseline": "node --experimental-strip-types bench/baseline.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
