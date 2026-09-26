@@ -42,8 +42,8 @@ loop — compaction is a separate hook this plugin does not register.
 
 ```
 outgoing request -> map OpenCode messages to the library message model
-                 -> ask Jev two noul questions per candidate tool call
-                    (keep the call? keep the result?)
+                 -> ask Jev one choice question per candidate tool call
+                    (keep / drop the result / drop the call too)
                  -> drop_call / drop_result / keep
                  -> rewrite only the outgoing request
 ```
@@ -282,11 +282,13 @@ by keepThreshold (legacy single-knob mode):
   0.15         1610    -  0.0%   keep=6 drop_result=0 drop_call=0
 ```
 
-With the shipped defaults (`keepCallThreshold` 0.5 / `keepResultThreshold` 0.25) the same
-transcript keeps every call and truncates the three bulky outputs: the edit and the passing
+With the shipped defaults (`keepCallThreshold` 0.25 / `keepResultThreshold` 0.15) the same
+transcript keeps every call and truncates the bulky outputs: the edit and the passing
 test run survive, which is the point of splitting the thresholds. An earlier single-threshold
 default of 0.5 removed all six calls on this transcript - including the edit - which is what
-prompted the split.
+prompted the split. Both thresholds were then re-calibrated from live `choice` answers on real
+sessions, where `noul` readings sat at 0.26-0.42 for calls and 0.09-0.21 for results and made
+`keep` unreachable at 0.5 / 0.25.
 
 Three passes cost **one** Jev request: decisions are cached and re-decided locally when a
 threshold changes.

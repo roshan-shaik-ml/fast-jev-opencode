@@ -282,6 +282,7 @@ export const FastJevV2 = Plugin.define({
             ruleDrops: result.ruleDrops,
             requests: result.requests,
             stateTokens: result.stateTokens,
+            estimatedCostUsd: result.estimatedCostUsd,
             stage: result.stage,
           })
       } catch (error) {

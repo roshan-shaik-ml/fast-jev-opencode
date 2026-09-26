@@ -189,6 +189,7 @@ export const FastJevV1: Plugin = async ({ client }) => {
             ...applied,
             requests: result.requests,
             stateTokens: result.stateTokens,
+            estimatedCostUsd: result.estimatedCostUsd,
             stage: result.stage,
           })
       } catch (error) {
