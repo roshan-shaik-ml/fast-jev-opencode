@@ -141,6 +141,22 @@ check(
   kept[1].parts[0].state.output.length === 5000 && kept[2].parts[0].state.output.length === 5000,
 )
 
+console.log("\n[stub (default)]")
+const stubbed = await run("stub", () => 0)
+const stubbedTools = stubbed.flatMap((m) => m.parts).filter((p) => p.type === "tool")
+check("stub: message count unchanged", stubbed.length === 10, `got ${stubbed.length}`)
+check("stub: tool parts kept", stubbedTools.length === 3, `got ${stubbedTools.length}`)
+check(
+  "stub: outputs cleared with note",
+  stubbedTools.every((p) => p.state.output.includes("fast-jev cleared")),
+)
+check(
+  "stub: narration keeps its evidence",
+  stubbedTools.some((p) => p.callID === "stub-3"),
+)
+
+console.log("\n[delete mode]")
+writeCfg({ removedCallStyle: "delete" })
 const dropped = await run("dropcall", () => 0)
 check("drop_call: message count reduced to 8", dropped.length === 8, `got ${dropped.length}`)
 check(
@@ -151,6 +167,7 @@ check(
   "drop_call: text-only sibling survives",
   dropped.some((m) => m.parts.some((p) => p.type === "text" && p.text === "found it")),
 )
+writeCfg()
 
 const truncated = await run("dropresult", (name) => (name.startsWith("call_") ? 0.9 : 0.1))
 const tools = truncated.flatMap((m) => m.parts).filter((p) => p.type === "tool")
@@ -227,6 +244,7 @@ hang.close()
 writeCfg({ baseUrl: `http://127.0.0.1:${port}`, timeoutMs: 30000 })
 
 console.log("\n[pinning]")
+writeCfg({ removedCallStyle: "delete" })
 answerer = () => 0
 const pinned = fixture("pin")
 pinned[8] = message("assistant", [tool("pin-8", "read", BIG)])
@@ -240,6 +258,7 @@ check(
   "pinning: calls outside window dropped",
   !pinParts.some((p) => p.callID === "pin-1" || p.callID === "pin-2" || p.callID === "pin-3"),
 )
+writeCfg()
 
 console.log("\n[preserveRecentMessages]")
 writeCfg({ preserveRecentMessages: 10 })
@@ -253,7 +272,7 @@ check("all pinned: no Jev request", requestCount === 0, `got ${requestCount}`)
 writeCfg()
 
 console.log("\n[protectTools]")
-writeCfg({ protectTools: ["bash"] })
+writeCfg({ protectTools: ["bash"], removedCallStyle: "delete" })
 answerer = () => 0
 const protectedMsgs = fixture("prot")
 await transform({}, { messages: protectedMsgs })
@@ -328,7 +347,12 @@ await transform({}, { messages: guarded })
 check("guard: nothing pruned when no call is kept", JSON.stringify(guarded) === guardedBefore)
 
 console.log("\n[multi-batch]")
-writeCfg({ maxStateTokens: 3000, maxRequestTokens: 3600, minScored: 1000 })
+writeCfg({
+  maxStateTokens: 3000,
+  maxRequestTokens: 3600,
+  minScored: 1000,
+  removedCallStyle: "delete",
+})
 answerer = () => 0
 requestCount = 0
 const many = [message("user", [text("task")])]

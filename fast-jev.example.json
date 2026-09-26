@@ -11,6 +11,7 @@
   "minResultChars": 2000,
   "peekChars": 200,
   "minScored": 8,
+  "removedCallStyle": "stub",
   "protectTools": [],
   "rejudgeAfterMs": 600000,
   "timeoutMs": 30000,

@@ -132,6 +132,22 @@ const kept = await run("keep", () => 1)
 check("keep: message count unchanged", kept.length === 10, `got ${kept.length}`)
 check("keep: tool content untouched", kept[1].content[0].state.content[0].text.length === 5000)
 
+console.log("\n[stub (default)]")
+const stubbed = await run("stub", () => 0)
+const stubbedTools = stubbed.flatMap((m) => m.content ?? []).filter((p) => p.type === "tool")
+check("stub: message count unchanged", stubbed.length === 10, `got ${stubbed.length}`)
+check("stub: tool parts kept", stubbedTools.length === 3, `got ${stubbedTools.length}`)
+check(
+  "stub: outputs cleared with note",
+  stubbedTools.every((p) => p.state.content[0].text.includes("fast-jev cleared")),
+)
+check(
+  "stub: narration keeps its evidence",
+  stubbedTools.some((p) => p.id === "stub-3"),
+)
+
+console.log("\n[delete mode]")
+writeCfg({ removedCallStyle: "delete" })
 const dropped = await run("dropcall", () => 0)
 check("drop_call: tool-only messages removed", dropped.length === 8, `got ${dropped.length}`)
 check(
@@ -142,6 +158,7 @@ check(
   "drop_call: sibling text survives",
   dropped.some((m) => (m.content ?? []).some((p) => p.type === "text" && p.text === "found it")),
 )
+writeCfg()
 
 const truncated = await run("dropresult", (name) => (name.startsWith("call_") ? 0.9 : 0.1))
 const tools = truncated.flatMap((m) => m.content ?? []).filter((p) => p.type === "tool")

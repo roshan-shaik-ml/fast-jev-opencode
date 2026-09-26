@@ -6,8 +6,10 @@ import {
   plan,
   resolveApiKey,
   shouldWarnConfig,
+  stubbedResultText,
   truncatedResultText,
   type CallAction,
+  type RemovedCallStyle,
   type TranscriptMessage,
 } from "./shared.ts"
 
@@ -66,8 +68,15 @@ export function applyActions(
   messages: V1Message[],
   actions: Map<string, CallAction>,
   headChars: number,
-): { droppedCalls: number; droppedResults: number; removedMessages: number } {
+  style: RemovedCallStyle,
+): {
+  droppedCalls: number
+  stubbedCalls: number
+  droppedResults: number
+  removedMessages: number
+} {
   let droppedCalls = 0
+  let stubbedCalls = 0
   let droppedResults = 0
   let removedMessages = 0
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -79,8 +88,18 @@ export function applyActions(
       if (!part || part.type !== "tool") continue
       const action = actions.get(String(part.callID ?? ""))
       if (action === "drop_call") {
-        parts.splice(j, 1)
-        droppedCalls += 1
+        if (style === "delete") {
+          parts.splice(j, 1)
+          droppedCalls += 1
+          continue
+        }
+        const state = part.state
+        if (state && state.status === "completed" && typeof state.output === "string") {
+          state.output = stubbedResultText(state.output, false, headChars)
+        } else if (state && state.status === "error" && typeof state.error === "string") {
+          state.error = stubbedResultText(state.error, true, headChars)
+        }
+        stubbedCalls += 1
         continue
       }
       if (action === "drop_result") {
@@ -106,7 +125,7 @@ export function applyActions(
       removedMessages += 1
     }
   }
-  return { droppedCalls, droppedResults, removedMessages }
+  return { droppedCalls, stubbedCalls, droppedResults, removedMessages }
 }
 
 export const FastJevV1: Plugin = async ({ client }) => {
@@ -157,7 +176,12 @@ export const FastJevV1: Plugin = async ({ client }) => {
             })
           return
         }
-        const applied = applyActions(messages, result.actions, cfg.truncateHeadChars)
+        const applied = applyActions(
+          messages,
+          result.actions,
+          cfg.truncateHeadChars,
+          cfg.removedCallStyle,
+        )
         if (cfg.log)
           log("info", "pruned outgoing request", {
             ...applied,

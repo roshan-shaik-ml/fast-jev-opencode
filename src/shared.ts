@@ -20,6 +20,16 @@ import {
 
 export type Provider = "typesafe" | "zen" | "openrouter" | "custom"
 
+/**
+ * What to do with a call Jev rates as no longer needed.
+ *
+ * `stub` keeps the call in place with its output cut short. `delete` removes it
+ * entirely. Deleting is smaller, but it leaves the assistant's narration with no
+ * evidence attached — and a model that sees its own past turns narrate work with
+ * no tool calls will imitate that shape and report work it never did.
+ */
+export type RemovedCallStyle = "stub" | "delete"
+
 export interface Config {
   enabled: boolean
   dryRun: boolean
@@ -39,6 +49,7 @@ export interface Config {
   minResultChars: number
   peekChars: number
   minScored: number
+  removedCallStyle: RemovedCallStyle
   protectTools: string[]
   rejudgeAfterMs: number
   timeoutMs: number
@@ -84,6 +95,7 @@ const DEFAULTS = {
   minResultChars: 2000,
   peekChars: 200,
   minScored: 8,
+  removedCallStyle: "stub" as RemovedCallStyle,
   protectTools: [] as string[],
   rejudgeAfterMs: 600000,
   timeoutMs: 30000,
@@ -237,6 +249,10 @@ export function loadConfig(): Config {
     minResultChars: pickNum(file.minResultChars, DEFAULTS.minResultChars, 0, 1000000),
     peekChars: pickNum(file.peekChars, DEFAULTS.peekChars, 0, 4000),
     minScored: pickNum(file.minScored, DEFAULTS.minScored, 0, 10000),
+    removedCallStyle:
+      file.removedCallStyle === "delete" || file.removedCallStyle === "stub"
+        ? file.removedCallStyle
+        : DEFAULTS.removedCallStyle,
     protectTools: Array.isArray(file.protectTools)
       ? file.protectTools.filter((t) => typeof t === "string")
       : DEFAULTS.protectTools,
@@ -287,6 +303,15 @@ export function truncatedResultText(text: string, isError: boolean, headChars: n
   if (text.length <= headChars + 120) return text
   const head = headChars > 0 ? `${text.slice(0, headChars)}\n` : ""
   return `${head}[fast-jev pruned ${text.length - headChars} chars of this tool result${
+    isError ? " (error)" : ""
+  }; re-run the tool if needed]`
+}
+
+/** The note left when a call is stubbed rather than deleted. */
+export function stubbedResultText(text: string, isError: boolean, headChars: number): string {
+  if (text.length <= headChars + 120) return text
+  const head = headChars > 0 ? `${text.slice(0, headChars)}\n` : ""
+  return `${head}[fast-jev cleared ${text.length - headChars} chars of this tool result${
     isError ? " (error)" : ""
   }; re-run the tool if needed]`
 }

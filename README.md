@@ -66,6 +66,12 @@ A candidate is a tool call that is not pinned (first message / newest
   judgement is made on what the output contained rather than on a byte count.
 - **Guarded:** a pass that scored `minScored` calls and kept none is refused outright — a
   blanket removal is a bad answer, not a decision, and the request goes out untouched.
+- **Shape-preserving:** a call Jev rates as no longer needed keeps its place with the output
+  cut short (`removedCallStyle: "stub"`). Deleting it leaves the assistant's narration with no
+  evidence behind it, and a model that sees that shape starts reporting work it never did —
+  the failure reported upstream as
+
+  smaller, older behaviour.
 
 ## Install
 
@@ -175,30 +181,31 @@ Without a valid key the plugin fails open: it logs a warning and sends the reque
 `~/.config/opencode/fast-jev.json` is re-read on every request, so edits apply without a
 restart. The shipped example is observe-only (`dryRun: true`).
 
-| Option                   | Default    | Meaning                                                      |
-| ------------------------ | ---------- | ------------------------------------------------------------ |
-| `enabled`                | `true`     | Master switch                                                |
-| `dryRun`                 | `true`     | Score and log, but do not rewrite the request                |
-| `provider`               | `typesafe` | `typesafe`, `zen`, `openrouter`, or `custom`                 |
-| `baseUrl`                | preset     | System One endpoint (required for `custom`)                  |
-| `model`                  | preset     | Jev model id                                                 |
-| `apiKey`                 | `""`       | Inline key (prefer `apiKeyEnv`)                              |
-| `apiKeyEnv`              | preset     | Environment variable holding the key                         |
-| `apiKeyFile`             | `""`       | File containing the key                                      |
-| `keepCallThreshold`      | `0.5`      | Minimum probability for the call itself to stay              |
-| `keepResultThreshold`    | `0.25`     | Minimum probability for its output to stay verbatim          |
-| `keepThreshold`          | _unset_    | Legacy override: sets both thresholds to one value           |
-| `preserveRecentMessages` | `6`        | Newest messages never judged                                 |
-| `maxStateTokens`         | `25000`    | State token ceiling                                          |
-| `maxRequestTokens`       | `30000`    | State plus one batch of questions                            |
-| `truncateHeadChars`      | `300`      | Head kept when a result is truncated                         |
-| `minResultChars`         | `2000`     | Results below this are never candidates                      |
-| `peekChars`              | `200`      | Head/tail excerpt of each result shown to Jev                |
-| `minScored`              | `8`        | Refuse a pass that scored this many calls and kept none      |
-| `protectTools`           | `[]`       | Tool names whose calls/results are always kept               |
-| `rejudgeAfterMs`         | `600000`   | Re-score a call after this long; `0` re-scores every request |
-| `timeoutMs`              | `30000`    | Per-request deadline; a stalled endpoint fails open          |
-| `log`                    | `true`     | Structured logging via the host client                       |
+| Option                   | Default    | Meaning                                                                        |
+| ------------------------ | ---------- | ------------------------------------------------------------------------------ |
+| `enabled`                | `true`     | Master switch                                                                  |
+| `dryRun`                 | `true`     | Score and log, but do not rewrite the request                                  |
+| `provider`               | `typesafe` | `typesafe`, `zen`, `openrouter`, or `custom`                                   |
+| `baseUrl`                | preset     | System One endpoint (required for `custom`)                                    |
+| `model`                  | preset     | Jev model id                                                                   |
+| `apiKey`                 | `""`       | Inline key (prefer `apiKeyEnv`)                                                |
+| `apiKeyEnv`              | preset     | Environment variable holding the key                                           |
+| `apiKeyFile`             | `""`       | File containing the key                                                        |
+| `keepCallThreshold`      | `0.5`      | Minimum probability for the call itself to stay                                |
+| `keepResultThreshold`    | `0.25`     | Minimum probability for its output to stay verbatim                            |
+| `keepThreshold`          | _unset_    | Legacy override: sets both thresholds to one value                             |
+| `preserveRecentMessages` | `6`        | Newest messages never judged                                                   |
+| `maxStateTokens`         | `25000`    | State token ceiling                                                            |
+| `maxRequestTokens`       | `30000`    | State plus one batch of questions                                              |
+| `truncateHeadChars`      | `300`      | Head kept when a result is truncated                                           |
+| `minResultChars`         | `2000`     | Results below this are never candidates                                        |
+| `peekChars`              | `200`      | Head/tail excerpt of each result shown to Jev                                  |
+| `minScored`              | `8`        | Refuse a pass that scored this many calls and kept none                        |
+| `removedCallStyle`       | `"stub"`   | `"stub"` keeps a removed call with its output cut short; `"delete"` removes it |
+| `protectTools`           | `[]`       | Tool names whose calls/results are always kept                                 |
+| `rejudgeAfterMs`         | `600000`   | Re-score a call after this long; `0` re-scores every request                   |
+| `timeoutMs`              | `30000`    | Per-request deadline; a stalled endpoint fails open                            |
+| `log`                    | `true`     | Structured logging via the host client                                         |
 
 Set `FAST_JEV_CONFIG` to point the plugin at a different config file (used by the tests).
 

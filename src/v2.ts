@@ -6,8 +6,10 @@ import {
   plan,
   resolveApiKey,
   shouldWarnConfig,
+  stubbedResultText,
   truncatedResultText,
   type CallAction,
+  type RemovedCallStyle,
   type TranscriptMessage,
 } from "./shared.ts"
 
@@ -83,8 +85,15 @@ export function applyActions(
   messages: V2Message[],
   actions: Map<string, CallAction>,
   headChars: number,
-): { droppedCalls: number; droppedResults: number; removedMessages: number } {
+  style: RemovedCallStyle,
+): {
+  droppedCalls: number
+  stubbedCalls: number
+  droppedResults: number
+  removedMessages: number
+} {
   let droppedCalls = 0
+  let stubbedCalls = 0
   let droppedResults = 0
   let removedMessages = 0
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -97,8 +106,27 @@ export function applyActions(
       if (!part || part.type !== "tool") continue
       const action = actions.get(String(part.id ?? ""))
       if (action === "drop_call") {
-        content.splice(j, 1)
-        droppedCalls += 1
+        if (style === "delete") {
+          content.splice(j, 1)
+          droppedCalls += 1
+          continue
+        }
+        const state = part.state
+        if (state && state.status === "completed" && Array.isArray(state.content)) {
+          for (const entry of state.content) {
+            if (entry && entry.type === "text" && typeof entry.text === "string") {
+              entry.text = stubbedResultText(entry.text, false, headChars)
+            }
+          }
+        } else if (
+          state &&
+          state.status === "error" &&
+          state.error &&
+          typeof state.error.message === "string"
+        ) {
+          state.error.message = stubbedResultText(state.error.message, true, headChars)
+        }
+        stubbedCalls += 1
         continue
       }
       if (action === "drop_result") {
@@ -132,7 +160,7 @@ export function applyActions(
       removedMessages += 1
     }
   }
-  return { droppedCalls, droppedResults, removedMessages }
+  return { droppedCalls, stubbedCalls, droppedResults, removedMessages }
 }
 
 export const FastJevV2 = Plugin.define({
@@ -194,7 +222,12 @@ export const FastJevV2 = Plugin.define({
             })
           return
         }
-        const applied = applyActions(messages, result.actions, cfg.truncateHeadChars)
+        const applied = applyActions(
+          messages,
+          result.actions,
+          cfg.truncateHeadChars,
+          cfg.removedCallStyle,
+        )
         if (cfg.log)
           log("info", "pruned outgoing request", {
             ...applied,
