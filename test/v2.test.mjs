@@ -66,7 +66,8 @@ const baseCfg = {
   timeoutMs: 30000,
   log: false,
 }
-const writeCfg = (overrides = {}) => writeFileSync(cfgPath, JSON.stringify({ ...baseCfg, ...overrides }))
+const writeCfg = (overrides = {}) =>
+  writeFileSync(cfgPath, JSON.stringify({ ...baseCfg, ...overrides }))
 writeCfg()
 
 const mod = await import(pathToFileURL(join(process.cwd(), "src", "index.ts")).href)
@@ -130,7 +131,9 @@ function fixture(tag) {
 const callsOf = (messages) =>
   messages.flatMap((message) => (message.content ?? []).filter((part) => part.type === "tool-call"))
 const resultsOf = (messages) =>
-  messages.flatMap((message) => (message.content ?? []).filter((part) => part.type === "tool-result"))
+  messages.flatMap((message) =>
+    (message.content ?? []).filter((part) => part.type === "tool-result"),
+  )
 const textOf = (message) =>
   (message.content ?? [])
     .filter((part) => part.type === "text")
@@ -163,24 +166,40 @@ async function run(label, fn) {
 
 const kept = await run("keep", () => 1)
 check("keep: message count unchanged", kept.messages.length === 14, `got ${kept.messages.length}`)
-check("keep: tool results untouched", resultsOf(kept.messages).every((part) => part.result.value.length === 5000))
+check(
+  "keep: tool results untouched",
+  resultsOf(kept.messages).every((part) => part.result.value.length === 5000),
+)
 check("keep: nothing removed", kept.after === kept.before, `${kept.before} -> ${kept.after}`)
 
 const stubbed = await run("stub", () => 0)
-check("stub: calls kept in place", callsOf(stubbed.messages).length === 3, `got ${callsOf(stubbed.messages).length}`)
+check(
+  "stub: calls kept in place",
+  callsOf(stubbed.messages).length === 3,
+  `got ${callsOf(stubbed.messages).length}`,
+)
 check(
   "stub: results cleared with a note",
-  resultsOf(stubbed.messages).every((part) => String(part.result.value).includes("fast-jev cleared")),
+  resultsOf(stubbed.messages).every((part) =>
+    String(part.result.value).includes("fast-jev cleared"),
+  ),
 )
 check(
   "stub: oversized call inputs cut",
   callsOf(stubbed.messages).every((part) => JSON.stringify(part.input ?? {}).length < 400),
 )
-check("stub: prose untouched", stubbed.messages.some((m) => textOf(m).includes("Never edit src/generated")))
+check(
+  "stub: prose untouched",
+  stubbed.messages.some((m) => textOf(m).includes("Never edit src/generated")),
+)
 
 writeCfg({ removedCallStyle: "delete" })
 const deleted = await run("delete", () => 0)
-check("delete: tool calls removed", callsOf(deleted.messages).length === 0, `got ${callsOf(deleted.messages).length}`)
+check(
+  "delete: tool calls removed",
+  callsOf(deleted.messages).length === 0,
+  `got ${callsOf(deleted.messages).length}`,
+)
 check("delete: tool results removed", resultsOf(deleted.messages).length === 0)
 check("delete: messages dropped", deleted.messages.length < 14, `got ${deleted.messages.length}`)
 writeCfg()
@@ -189,11 +208,15 @@ const truncated = await run("dropresult", (name) => (name.startsWith("call_") ? 
 check("drop_result: calls kept", callsOf(truncated.messages).length === 3)
 check(
   "drop_result: results truncated with a note",
-  resultsOf(truncated.messages).every((part) => String(part.result.value).includes("fast-jev pruned")),
+  resultsOf(truncated.messages).every((part) =>
+    String(part.result.value).includes("fast-jev pruned"),
+  ),
 )
 check(
   "drop_result: head preserved",
-  resultsOf(truncated.messages).every((part) => String(part.result.value).startsWith("X".repeat(300))),
+  resultsOf(truncated.messages).every((part) =>
+    String(part.result.value).startsWith("X".repeat(300)),
+  ),
 )
 
 console.log("\n[unmatched call]")
@@ -221,7 +244,8 @@ await transform({ messages: errored, system: [], tools: {}, options: {}, session
 const errResult = resultsOf(errored).find((part) => part.id === "err-1")
 check(
   "error result: truncated with an (error) note",
-  String(errResult.result.value).includes("fast-jev pruned") && String(errResult.result.value).includes("(error)"),
+  String(errResult.result.value).includes("fast-jev pruned") &&
+    String(errResult.result.value).includes("(error)"),
 )
 
 console.log("\n[dryRun]")
@@ -240,11 +264,17 @@ writeCfg()
 answerer = () => 1
 const noModel = fixture("nomodel")
 await transform({ messages: noModel, system: [], tools: {}, options: {}, sessionID: "s" })
-check("custom provider without model: sends default model", lastModel === "jev-latest", `got ${JSON.stringify(lastModel)}`)
+check(
+  "custom provider without model: sends default model",
+  lastModel === "jev-latest",
+  `got ${JSON.stringify(lastModel)}`,
+)
 
 console.log("\n[verbatim checkpoint]")
 {
-  const { renderCheckpoint } = await import(pathToFileURL(join(process.cwd(), "src", "checkpoint.ts")).href)
+  const { renderCheckpoint } = await import(
+    pathToFileURL(join(process.cwd(), "src", "checkpoint.ts")).href
+  )
   const rendered = renderCheckpoint(
     [
       { role: "user", text: "Fix the failing test", toolUses: [] },
@@ -257,14 +287,20 @@ console.log("\n[verbatim checkpoint]")
     ],
     { truncateHeadChars: 100, maxChars: 100000 },
   )
-  check("checkpoint: renders prose verbatim", typeof rendered === "string" && rendered.includes("Fix the failing test"))
-  check("checkpoint: cuts bulky output", typeof rendered === "string" && rendered.includes("head kept"))
+  check(
+    "checkpoint: renders prose verbatim",
+    typeof rendered === "string" && rendered.includes("Fix the failing test"),
+  )
+  check(
+    "checkpoint: cuts bulky output",
+    typeof rendered === "string" && rendered.includes("head kept"),
+  )
   check(
     "checkpoint: refuses to oversize",
-    renderCheckpoint(
-      [{ role: "user", text: "x", toolUses: [] }],
-      { truncateHeadChars: 100, maxChars: 5 },
-    ) === undefined,
+    renderCheckpoint([{ role: "user", text: "x", toolUses: [] }], {
+      truncateHeadChars: 100,
+      maxChars: 5,
+    }) === undefined,
   )
 }
 

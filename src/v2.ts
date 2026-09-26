@@ -253,11 +253,10 @@ export const FastJevV2 = Plugin.define({
         const result = await plan(toTranscriptMessages(messages), cfg, makeAsker(cfg, apiKey))
         if (result.blocked) {
           if (cfg.log)
-            log(
-              "warn",
-              `keep-signal guard (${result.blockedReason}): request left untouched`,
-              { candidates: result.candidates, stage: result.stage },
-            )
+            log("warn", `keep-signal guard (${result.blockedReason}): request left untouched`, {
+              candidates: result.candidates,
+              stage: result.stage,
+            })
           return
         }
         if (result.actions.size === 0) {
@@ -275,7 +274,12 @@ export const FastJevV2 = Plugin.define({
             })
           return
         }
-        const applied = applyActions(messages, result.actions, cfg.truncateHeadChars, cfg.removedCallStyle)
+        const applied = applyActions(
+          messages,
+          result.actions,
+          cfg.truncateHeadChars,
+          cfg.removedCallStyle,
+        )
         if (cfg.log)
           log("info", "pruned outgoing request", {
             ...applied,
