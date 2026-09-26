@@ -1,5 +1,5 @@
 ﻿import { createServer } from "node:http"
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -414,6 +414,27 @@ console.log("\n[effort]")
   const dryEffort = fixture("eff-dry")
   await runEffort(dryEffort)
   check("effort: dryRun injects nothing", effortParts(dryEffort).length === 0)
+  writeCfg()
+}
+
+console.log("\n[log file]")
+{
+  const logPath = join(home, "fast-jev.log")
+
+  writeCfg()
+  answerer = () => 1
+  const quiet = fixture("log-off")
+  await transform({ messages: quiet, system: [], tools: {}, options: {}, sessionID: "s" })
+  check("logFile: nothing written when unset", !existsSync(logPath))
+
+  writeCfg({ logFile: logPath, minScored: 0, minResultChars: 0 })
+  answerer = () => 0
+  const loud = fixture("log-on")
+  await transform({ messages: loud, system: [], tools: {}, options: {}, sessionID: "s" })
+  const written = existsSync(logPath) ? readFileSync(logPath, "utf8") : ""
+  check("logFile: a prune is recorded", written.includes("pruned outgoing request"))
+  check("logFile: the record carries counts", /"droppedResults":\d+/.test(written))
+  check("logFile: no task text leaks into it", !written.includes("Never edit src/generated"))
   writeCfg()
 }
 

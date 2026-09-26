@@ -91,6 +91,7 @@ restart. `FAST_JEV_CONFIG` points the plugin at a different file. The
 | `verbatimCheckpoint`     | `false`    | At compaction, record the messages themselves instead of a summary   |
 | `effortEnabled`          | `false`    | v2: let Jev choose the request's reasoning effort (see below)        |
 | `effortLevels`           | see below  | Levels offered when the model declares none of its own               |
+| `logFile`                | `""`       | Append decisions to this file (see below); `~` is expanded           |
 | `log`                    | `true`     | Structured logging via the host client                               |
 
 Presets: `typesafe` (`api.typesafe.ai/v1/systemone`, `jev-latest`), `zen`
@@ -154,6 +155,29 @@ that does not expect an effort part rejects the entire request (an OpenAI-chat r
 does nothing. The decision is cached per session and digest for `rejudgeAfterMs`, so a turn asks
 once, and a failure fails open with the request untouched. v1 has no effort parts, so this is
 v2-only.
+
+## Watching it work
+
+v2 hands plugins no log sink, so the plugin's output has nowhere to go unless you give it a
+file:
+
+```json
+{ "logFile": "~/.local/share/opencode/fast-jev.log" }
+```
+
+One line per decision, counts only — no prompts, no tool output, no keys:
+
+```
+2026-09-27T00:12:03Z [fast-jev] info: pruned outgoing request {"droppedCalls":0,"stubbedCalls":1,"droppedResults":2,"removedMessages":0,"ruleDrops":0,"requests":1,"stateTokens":8159,"estimatedCostUsd":0,"stage":"full"}
+```
+
+Set `logFile` alone and logging turns on; setting `log: false` with a `logFile` present is
+treated as "log to the file only". The file rotates to `.old` at 2 MB.
+
+A quiet file is not always a fault. Nothing is judged unless a result is at least
+`minResultChars` (2000 by default) and older than the newest `preserveRecentMessages` messages,
+and a pass that scored `minScored` calls without keeping any is refused on purpose. Short
+sessions legitimately produce nothing.
 
 ## Measured
 

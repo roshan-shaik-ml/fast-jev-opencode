@@ -25,6 +25,7 @@
   "effortLevels": ["low", "medium", "high"],
   "effortModels": {},
   "effortDigestChars": 500,
+  "logFile": "",
   "protectTools": [],
   "rejudgeAfterMs": 600000,
   "timeoutMs": 30000,

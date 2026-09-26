@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs"
+import { appendFileSync, readFileSync, renameSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import {
@@ -73,6 +73,32 @@ export interface Config {
   effortLevels: EffortLevel[]
   effortModels: Record<string, EffortLevel[]>
   effortDigestChars: number
+  logFile: string
+}
+
+/** `~` expansion, so a config can say `~/fast-jev.log`. */
+function expandHome(path: string): string {
+  if (!path.startsWith("~")) return path
+  return join(homedir(), path.slice(1).replace(/^[\\/]/, ""))
+}
+
+/**
+ * v2 hands plugins no log sink (`ctx.app` is name/version/channel), so a file is
+ * the only way a user can see what the plugin decided. Bounded by one rotation,
+ * and it never throws: logging must not be able to break a request.
+ */
+export function appendLogFile(path: string, line: string): void {
+  try {
+    const target = expandHome(path)
+    try {
+      if (statSync(target).size > 2_000_000) renameSync(target, `${target}.old`)
+    } catch {
+      /* no file yet */
+    }
+    appendFileSync(target, `${new Date().toISOString()} ${line}\n`)
+  } catch {
+    /* fail-open */
+  }
 }
 
 export const PRESETS: Record<
@@ -130,6 +156,7 @@ const DEFAULTS = {
   effortLevels: [...DEFAULT_EFFORT_LEVELS],
   effortModels: {} as Record<string, EffortLevel[]>,
   effortDigestChars: 500,
+  logFile: "",
 }
 
 const CONFIG_CANDIDATES = process.env.FAST_JEV_CONFIG
@@ -333,6 +360,7 @@ export function loadConfig(): Config {
     effortLevels: pickEffortLevels(file.effortLevels, DEFAULTS.effortLevels),
     effortModels: pickEffortModels(file.effortModels),
     effortDigestChars: pickNum(file.effortDigestChars, DEFAULTS.effortDigestChars, 80, 4000),
+    logFile: pick(typeof file.logFile === "string" ? file.logFile : undefined, DEFAULTS.logFile),
   }
 }
 

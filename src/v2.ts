@@ -8,6 +8,7 @@ import {
   type JevAsker,
 } from "./engine/index.ts"
 import {
+  appendLogFile,
   effortLadder,
   getConfigIssues,
   loadConfig,
@@ -316,12 +317,24 @@ export const FastJevV2 = Plugin.define({
 
   async setup(ctx) {
     let warnedShape = false
+    // Set from config on every request, so turning it on needs no restart.
+    let logFile = ""
     const log = (level: "debug" | "info" | "warn" | "error", message: string, extra?: unknown) => {
+      let detail = ""
+      if (extra !== undefined) {
+        try {
+          detail = ` ${JSON.stringify(extra)}`
+        } catch {
+          detail = ` ${String(extra)}`
+        }
+      }
+      const line = `[fast-jev] ${level}: ${message}${detail}`
       try {
-        console.error(`[fast-jev] ${level}: ${message}`, extra ?? "")
+        console.error(line)
       } catch {
         /* fail-open */
       }
+      if (logFile) appendLogFile(logFile, line)
     }
 
     /**
@@ -368,6 +381,10 @@ export const FastJevV2 = Plugin.define({
     const registration = await ctx.session.hook("context", async (event) => {
       try {
         const cfg = loadConfig()
+        // A log file implies logging: asking for one and getting nothing is a
+        // footgun, and this host cannot show plugin output anywhere else.
+        if (cfg.logFile !== "" && !cfg.log) cfg.log = true
+        logFile = cfg.log ? cfg.logFile : ""
         if (shouldWarnConfig()) log("warn", `config: ${getConfigIssues().join("; ")}`)
         if (!cfg.enabled) return
         const messages = event.messages as unknown as V2Message[]
@@ -482,6 +499,8 @@ export const FastJevV2 = Plugin.define({
     const checkpoint = await ctx.session.hook("compaction", async (event) => {
       try {
         const cfg = loadConfig()
+        if (cfg.logFile !== "" && !cfg.log) cfg.log = true
+        logFile = cfg.log ? cfg.logFile : ""
         if (!cfg.enabled || !cfg.verbatimCheckpoint) return
         const messages = (event as { messages?: unknown }).messages as unknown as V2Message[]
         if (!Array.isArray(messages) || messages.length === 0) return
