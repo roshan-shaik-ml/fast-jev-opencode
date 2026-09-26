@@ -36,6 +36,7 @@ interface Config {
   minResultChars: number
   protectTools: string[]
   rejudgeAfterMs: number
+  timeoutMs: number
   log: boolean
 }
 
@@ -76,19 +77,27 @@ const DEFAULTS: Omit<Config, "provider" | "apiKeyEnv" | "baseUrl" | "model"> & {
   minResultChars: 2000,
   protectTools: [],
   rejudgeAfterMs: 600000,
+  timeoutMs: 30000,
   log: true,
 }
 
 const CONFIG_PATH = join(homedir(), ".config", "opencode", "fast-jev.json")
 const ENV_PATH = join(homedir(), ".config", "opencode", ".env")
 
+let configError: string | null = null
+let configWarned = false
+
 function readConfigFile(): Partial<Config> {
+  configError = null
   for (const path of [CONFIG_PATH, join(homedir(), ".config", "opencode", "fast-jev.jsonc")]) {
     try {
       const raw = readFileSync(path, "utf8")
       const parsed = JSON.parse(raw.replace(/^\s*\/\/.*$/gm, ""))
       if (parsed && typeof parsed === "object") return parsed as Partial<Config>
-    } catch {
+    } catch (error) {
+      if ((error as { code?: string })?.code !== "ENOENT") {
+        configError = error instanceof Error ? error.message : String(error)
+      }
       continue
     }
   }
@@ -115,28 +124,38 @@ function pick<T>(value: T | undefined, fallback: T): T {
   return value === undefined || value === null || value === "" ? fallback : value
 }
 
+function pickBool(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback
+}
+
+function pickNum(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === "number" && Number.isFinite(value) ? value : fallback
+  return Math.min(max, Math.max(min, n))
+}
+
 function loadConfig(): Config {
   const file = readConfigFile()
   const provider: Provider = pick(file.provider, DEFAULTS.provider)
   const preset = provider === "custom" ? undefined : PRESETS[provider] ?? PRESETS.typesafe
   return {
-    enabled: pick(file.enabled, DEFAULTS.enabled),
-    dryRun: pick(file.dryRun, DEFAULTS.dryRun),
+    enabled: pickBool(file.enabled, DEFAULTS.enabled),
+    dryRun: pickBool(file.dryRun, DEFAULTS.dryRun),
     provider,
     apiKey: pick(file.apiKey, DEFAULTS.apiKey),
     apiKeyEnv: pick(file.apiKeyEnv, preset?.apiKeyEnv ?? ""),
     apiKeyFile: pick(file.apiKeyFile, DEFAULTS.apiKeyFile),
     baseUrl: pick(file.baseUrl, preset?.baseUrl ?? ""),
     model: pick(file.model, preset?.model ?? ""),
-    keepThreshold: pick(file.keepThreshold, DEFAULTS.keepThreshold),
-    preserveRecentMessages: pick(file.preserveRecentMessages, DEFAULTS.preserveRecentMessages),
-    maxStateTokens: pick(file.maxStateTokens, DEFAULTS.maxStateTokens),
-    maxRequestTokens: pick(file.maxRequestTokens, DEFAULTS.maxRequestTokens),
-    truncateHeadChars: pick(file.truncateHeadChars, DEFAULTS.truncateHeadChars),
-    minResultChars: pick(file.minResultChars, DEFAULTS.minResultChars),
-    protectTools: Array.isArray(file.protectTools) ? file.protectTools : DEFAULTS.protectTools,
-    rejudgeAfterMs: pick(file.rejudgeAfterMs, DEFAULTS.rejudgeAfterMs),
-    log: pick(file.log, DEFAULTS.log),
+    keepThreshold: pickNum(file.keepThreshold, DEFAULTS.keepThreshold, 0, 1),
+    preserveRecentMessages: pickNum(file.preserveRecentMessages, DEFAULTS.preserveRecentMessages, 0, 10000),
+    maxStateTokens: pickNum(file.maxStateTokens, DEFAULTS.maxStateTokens, 1, 1000000),
+    maxRequestTokens: pickNum(file.maxRequestTokens, DEFAULTS.maxRequestTokens, 1, 1000000),
+    truncateHeadChars: pickNum(file.truncateHeadChars, DEFAULTS.truncateHeadChars, 0, 1000000),
+    minResultChars: pickNum(file.minResultChars, DEFAULTS.minResultChars, 0, 1000000),
+    protectTools: Array.isArray(file.protectTools) ? file.protectTools.filter((t) => typeof t === "string") : DEFAULTS.protectTools,
+    rejudgeAfterMs: pickNum(file.rejudgeAfterMs, DEFAULTS.rejudgeAfterMs, 0, Number.MAX_SAFE_INTEGER),
+    timeoutMs: pickNum(file.timeoutMs, DEFAULTS.timeoutMs, 1000, 300000),
+    log: pickBool(file.log, DEFAULTS.log),
   }
 }
 
@@ -239,9 +258,7 @@ function pruneCache(now: number, ttl: number): void {
   for (const [key, entry] of cache) {
     if (ttl <= 0 || now - entry.at > ttl) cache.delete(key)
   }
-}
-
-interface Plan {
+}interface Plan {
   actions: Map<string, CallAction>
   calls: number
   candidates: number
@@ -269,7 +286,7 @@ async function plan(
   const protectedTool = (tool: string): boolean => cfg.protectTools.includes(tool)
   const stale = (id: string): boolean => {
     const entry = cache.get(id)
-    return !entry || (cfg.rejudgeAfterMs > 0 && now - entry.at >= cfg.rejudgeAfterMs)
+    return !entry || cfg.rejudgeAfterMs <= 0 || now - entry.at >= cfg.rejudgeAfterMs
   }
 
   const needed = calls.filter(
@@ -309,6 +326,7 @@ async function plan(
   const actions = new Map<string, CallAction>()
   for (const call of calls) {
     if (call.pinned || protectedTool(call.tool)) continue
+    if (call.resultChars < cfg.minResultChars) continue
     const entry = cache.get(call.tool_use_id)
     if (!entry) continue
     const decision = decideCall(call, entry.answer, options)
@@ -346,7 +364,6 @@ function applyActions(
           const next = truncatedResultText(state.output, false, headChars)
           if (next !== state.output) {
             state.output = next
-            if (state.time) state.time.compacted = Date.now()
             droppedResults += 1
           }
         } else if (state.status === "error" && typeof state.error === "string") {
@@ -369,7 +386,8 @@ function applyActions(
 export const FastJev: Plugin = async ({ client }) => {
   const log = (level: "debug" | "info" | "warn" | "error", message: string, extra?: unknown) => {
     try {
-      void client?.app?.log({ body: { service: "fast-jev", level, message, extra } })
+      const result = client?.app?.log({ body: { service: "fast-jev", level, message, extra } })
+      void Promise.resolve(result).catch(() => {})
     } catch {
       /* fail-open */
     }
@@ -379,6 +397,10 @@ export const FastJev: Plugin = async ({ client }) => {
     "experimental.chat.messages.transform": async (_input, output) => {
       try {
         const cfg = loadConfig()
+        if (configError && !configWarned) {
+          configWarned = true
+          log("warn", `config file failed to parse; using defaults: ${configError}`)
+        }
         if (!cfg.enabled) return
         const messages = output.messages as unknown as OpenCodeMessage[]
         if (!Array.isArray(messages) || messages.length === 0) return
@@ -388,7 +410,18 @@ export const FastJev: Plugin = async ({ client }) => {
           if (cfg.log) log("warn", "no Jev API key configured; leaving request untouched")
           return
         }
-        const asker = new JevClient({ apiKey, model: cfg.model, baseUrl: cfg.baseUrl })
+        const asker = new JevClient({
+          apiKey,
+          model: cfg.model,
+          baseUrl: cfg.baseUrl,
+          fetch: (input, init) => {
+            const controller = new AbortController()
+            const timer = setTimeout(() => controller.abort(), cfg.timeoutMs)
+            return fetch(input, { ...init, signal: controller.signal }).finally(() =>
+              clearTimeout(timer),
+            )
+          },
+        })
         const result = await plan(messages, cfg, asker)
         if (result.actions.size === 0) {
           if (cfg.log && result.candidates > 0)

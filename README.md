@@ -15,14 +15,20 @@ uses `experimental.chat.messages.transform` instead.
 
 ```
 outgoing request -> map OpenCode tool parts to the library message model
-                 -> ask Jev two noul questions per non-pinned tool call
+                 -> ask Jev two noul questions per candidate tool call
                     (keep the call? keep the result?)
                  -> drop_call / drop_result / keep
                  -> rewrite only the outgoing request
 ```
 
-- **Non-destructive:** persisted history, the UI, and `/compact` are never
-  modified. Only the request sent to the model is changed.
+A candidate is a tool call that is not pinned (first message / newest
+`preserveRecentMessages`), whose result is at least `minResultChars`, and whose
+tool is not in `protectTools`.
+
+- **Non-destructive:** persisted history, the UI, and stored sessions are never
+  modified. Only the request sent to the model is changed. (OpenCode also runs
+  this hook on the request that *builds* a `/compact` summary, so that request is
+  pruned too; the stored transcript still is not.)
 - **Verbatim:** user and assistant text is never rewritten. Only tool calls and
   tool outputs are dropped or truncated.
 - **Fail-open:** a missing key, timeout, transport error, bad answer, or any
@@ -48,10 +54,11 @@ OpenCode fetches the plugin and its dependency for you. Add it to
 }
 ```
 
-Or let the CLI edit the config for you:
+Or let the CLI edit the global config for you (`-g`; without it the CLI writes
+the project-local config):
 
 ```sh
-opencode plugin fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git
+opencode plugin fast-jev-opencode@git+https://github.com/roshan-shaik-ml/fast-jev-opencode.git -g
 ```
 
 ### Option B - local file
@@ -161,7 +168,8 @@ without a restart. The shipped example is observe-only (`dryRun: true`).
 | `truncateHeadChars` | `300` | Head kept when a result is truncated |
 | `minResultChars` | `2000` | Results below this are never candidates |
 | `protectTools` | `[]` | Tool names whose calls/results are always kept |
-| `rejudgeAfterMs` | `600000` | Re-score a call after this long |
+| `rejudgeAfterMs` | `600000` | Re-score a call after this long; `0` re-scores every request |
+| `timeoutMs` | `30000` | Per-request deadline; a stalled endpoint fails open |
 | `log` | `true` | Structured logging via the OpenCode client |
 
 Provider presets:

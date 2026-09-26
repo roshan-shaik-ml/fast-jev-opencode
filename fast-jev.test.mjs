@@ -11,11 +11,13 @@ process.env.HOME = home
 process.env.TYPESAFE_API_KEY = "test-key"
 
 let answerer = () => 1
+let requestCount = 0
 
 const server = createServer((req, res) => {
   let body = ""
   req.on("data", (chunk) => (body += chunk))
   req.on("end", () => {
+    requestCount += 1
     const parsed = JSON.parse(body)
     const answers = {}
     for (const [name, question] of Object.entries(parsed.questions ?? {})) {
@@ -30,21 +32,28 @@ const server = createServer((req, res) => {
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
 const port = server.address().port
 
-writeFileSync(
-  join(home, ".config", "opencode", "fast-jev.json"),
-  JSON.stringify({
-    enabled: true,
-    dryRun: false,
-    provider: "custom",
-    baseUrl: `http://127.0.0.1:${port}`,
-    apiKeyEnv: "TYPESAFE_API_KEY",
-    preserveRecentMessages: 6,
-    minResultChars: 0,
-    rejudgeAfterMs: 600000,
-    truncateHeadChars: 300,
-    log: false,
-  }),
-)
+const baseCfg = {
+  enabled: true,
+  dryRun: false,
+  provider: "custom",
+  baseUrl: `http://127.0.0.1:${port}`,
+  apiKeyEnv: "TYPESAFE_API_KEY",
+  preserveRecentMessages: 6,
+  minResultChars: 0,
+  rejudgeAfterMs: 600000,
+  truncateHeadChars: 300,
+  timeoutMs: 30000,
+  log: false,
+}
+
+function writeCfg(overrides = {}) {
+  writeFileSync(
+    join(home, ".config", "opencode", "fast-jev.json"),
+    JSON.stringify({ ...baseCfg, ...overrides }),
+  )
+}
+
+writeCfg()
 
 const pluginUrl = pathToFileURL(join(process.cwd(), "plugins", "fast-jev.ts")).href
 const mod = await import(pluginUrl)
@@ -132,6 +141,67 @@ check(
   tools.every((p) => p.state.output.startsWith("X".repeat(300))),
 )
 check("drop_result: message count unchanged", truncated.length === 10, `got ${truncated.length}`)
+check(
+  "drop_result: does not set time.compacted",
+  tools.every((p) => p.state.time.compacted === undefined),
+)
+
+console.log("\n[error result]")
+answerer = (name) => (name.startsWith("call_") ? 0.9 : 0.1)
+const errMessages = fixture("err")
+errMessages[1] = message("assistant", [tool("err-1", "bash", BIG, "error")])
+await transform({}, { messages: errMessages })
+const errTool = errMessages
+  .flatMap((m) => m.parts)
+  .find((p) => p.type === "tool" && p.callID === "err-1")
+check(
+  "error result: truncated with (error) note",
+  errTool.state.error.includes("fast-jev truncated") && errTool.state.error.includes("(error)"),
+)
+
+console.log("\n[cache]")
+answerer = () => 1
+requestCount = 0
+const cachedMessages = fixture("cache")
+await transform({}, { messages: cachedMessages })
+await transform({}, { messages: cachedMessages })
+check("cache: second request reuses decisions", requestCount === 1, `got ${requestCount}`)
+
+console.log("\n[rejudgeAfterMs 0]")
+writeCfg({ rejudgeAfterMs: 0 })
+answerer = () => 1
+requestCount = 0
+const rejudged = fixture("rejudge")
+await transform({}, { messages: rejudged })
+await transform({}, { messages: rejudged })
+check("rejudgeAfterMs 0: re-scores every request", requestCount === 2, `got ${requestCount}`)
+writeCfg({ rejudgeAfterMs: 600000 })
+
+console.log("\n[dryRun]")
+writeCfg({ dryRun: true })
+answerer = () => 0
+requestCount = 0
+const dry = fixture("dry")
+const dryBefore = JSON.stringify(dry)
+await transform({}, { messages: dry })
+check("dryRun: messages unchanged", JSON.stringify(dry) === dryBefore)
+check("dryRun: still scored via Jev", requestCount > 0, `got ${requestCount}`)
+writeCfg({ dryRun: false })
+
+console.log("\n[timeout fail-open]")
+const hang = createServer(() => {})
+await new Promise((resolve) => hang.listen(0, "127.0.0.1", resolve))
+writeCfg({ baseUrl: `http://127.0.0.1:${hang.address().port}`, timeoutMs: 500 })
+const stuck = fixture("stuck")
+const stuckBefore = JSON.stringify(stuck)
+const started = Date.now()
+await transform({}, { messages: stuck })
+const elapsed = Date.now() - started
+check("timeout: request untouched", JSON.stringify(stuck) === stuckBefore)
+check("timeout: returns within 5s", elapsed < 5000, `took ${elapsed}ms`)
+hang.closeAllConnections?.()
+hang.close()
+writeCfg({ baseUrl: `http://127.0.0.1:${port}`, timeoutMs: 30000 })
 
 console.log("\n[no-key fail-open]")
 delete process.env.TYPESAFE_API_KEY

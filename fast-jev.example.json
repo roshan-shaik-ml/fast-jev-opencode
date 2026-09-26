@@ -10,5 +10,6 @@
   "minResultChars": 2000,
   "protectTools": [],
   "rejudgeAfterMs": 600000,
+  "timeoutMs": 30000,
   "log": true
 }
