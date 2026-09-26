@@ -62,9 +62,9 @@ export type QuestionStyle = "noul" | "choice"
  * One three-way question instead of two independent ones.
  *
  * `noul` readings are absolute and can sit low for every question at once, which
- * is why a single threshold over them fails and why two had to be invented. A
- * `choice` answers what to *do* with the call, with the options competing against
- * each other, so no calibration is needed to read it.
+ * is why one threshold over them cannot work: the call and its result need
+ * separate thresholds. A `choice` answers what to *do* with the call, with the
+ * options competing against each other, so no calibration is needed to read it.
  */
 export function choiceQuestionFor(call: ToolCall, previewChars = 0): JevQuestions {
   return {

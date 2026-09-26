@@ -135,18 +135,18 @@ const proxy = createServer((req, res) => {
   req.on("data", (chunk) => (body += chunk))
   req.on("end", async () => {
     try {
-      const upstream = await fetch(ENDPOINT, {
+      const live = await fetch(ENDPOINT, {
         method: "POST",
         headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" },
         body,
       })
-      const text = await upstream.text()
+      const text = await live.text()
       try {
         recorded.push({ questions: JSON.parse(body).questions, answers: JSON.parse(text).answers })
       } catch {
         /* keep going; the plugin reports transport problems itself */
       }
-      res.writeHead(upstream.status, { "content-type": "application/json" })
+      res.writeHead(live.status, { "content-type": "application/json" })
       res.end(text)
     } catch (error) {
       res.writeHead(502, { "content-type": "application/json" })
