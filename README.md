@@ -93,7 +93,7 @@ restart. `FAST_JEV_CONFIG` points the plugin at a different file. The
 | `verbatimCheckpoint`     | `false`    | At compaction, record the messages themselves instead of a summary   |
 | `effortEnabled`          | `false`    | v2: let Jev choose the request's reasoning effort (see below)        |
 | `effortLevels`           | see below  | Levels offered when the model declares none of its own               |
-| `logFile`                | `""`       | Append decisions to this file (see below); `~` is expanded           |
+| `logFile`                | `""`       | v2 only: append decisions to this file; `~` is expanded (see below)  |
 | `log`                    | `true`     | Structured logging via the host client                               |
 
 Presets: `typesafe` (`api.typesafe.ai/v1/systemone`, `jev-latest`), `zen`
@@ -175,6 +175,9 @@ One line per decision, counts only — no prompts, no tool output, no keys:
 
 Set `logFile` alone and logging turns on; setting `log: false` with a `logFile` present is
 treated as "log to the file only". The file rotates to `.old` at 2 MB.
+
+This option is v2-only and ignored by the v1 adapter, which needs no file: v1's host surfaces
+plugin logs itself through `client.app.log`.
 
 A quiet file is not always a fault. Nothing is judged unless a result is at least
 `minResultChars` (2000 by default) and older than the newest `preserveRecentMessages` messages,
