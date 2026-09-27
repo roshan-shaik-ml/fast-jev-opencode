@@ -30,9 +30,11 @@ export default {
 }
 ```
 
-One difference worth knowing: in v1 the message hook also ran for the request that builds a
-`/compact` summary, so the pruner saw that request too. In v2 `context` covers only the agent
-loop — compaction is a separate hook this plugin does not register.
+One difference worth knowing: in v1 the message hook also runs for the request that builds a
+`/compact` summary, so the pruner sees that request too, and the old hook payload does not say
+which kind of request it is. In v2 `context` covers only the agent loop; compaction is a
+separate hook this plugin touches only when `verbatimCheckpoint` is enabled, which it is not by
+default.
 
 ## Install
 
