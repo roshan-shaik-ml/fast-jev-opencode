@@ -32,6 +32,14 @@ export function isCredentialKey(key: string): boolean {
   return CREDENTIAL_KEY.test(key)
 }
 
+function redactValue(value: unknown, depth: number): unknown {
+  if (typeof value === "string") return redactText(value)
+  if (Array.isArray(value)) return value.slice(0, 32).map((entry) => redactValue(entry, depth + 1))
+  if (value && typeof value === "object")
+    return redactInput(value as Record<string, unknown>, depth)
+  return value
+}
+
 /** Deep-copy a tool input with credential-named fields and secret-shaped values masked. */
 export function redactInput(input: Record<string, unknown>, depth = 0): Record<string, unknown> {
   if (depth > 4) return {}
@@ -44,12 +52,4 @@ export function redactInput(input: Record<string, unknown>, depth = 0): Record<s
     out[key] = redactValue(value, depth + 1)
   }
   return out
-}
-
-function redactValue(value: unknown, depth: number): unknown {
-  if (typeof value === "string") return redactText(value)
-  if (Array.isArray(value)) return value.slice(0, 32).map((entry) => redactValue(entry, depth + 1))
-  if (value && typeof value === "object")
-    return redactInput(value as Record<string, unknown>, depth)
-  return value
 }

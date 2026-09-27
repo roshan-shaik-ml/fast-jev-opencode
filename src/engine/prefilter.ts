@@ -2,6 +2,22 @@ import type { ToolCall } from "./types.ts"
 
 export type RuleReason = "duplicate" | "superseded" | "resolved"
 
+export interface RuleSet {
+  duplicate: boolean
+  superseded: boolean
+  resolved: boolean
+}
+
+const MUTATING = /^(edit|write|patch|multiedit|notebookedit|apply_patch)$/i
+
+/**
+ * `superseded` is off by default: measurement with `bench:baseline` shows it
+ * costing more later-referenced evidence than it saves requests. A read that a
+ * later edit modified can still be the passage the session went on to quote. The
+ * other two are provably redundant, because an identical request was made later.
+ */
+export const DEFAULT_RULES: RuleSet = { duplicate: true, superseded: false, resolved: true }
+
 function fingerprint(call: ToolCall): string {
   let input = ""
   try {
@@ -20,22 +36,6 @@ function pathOf(call: ToolCall): string | undefined {
   }
   return undefined
 }
-
-const MUTATING = /^(edit|write|patch|multiedit|notebookedit|apply_patch)$/i
-
-export interface RuleSet {
-  duplicate: boolean
-  superseded: boolean
-  resolved: boolean
-}
-
-/**
- * `superseded` is off by default: measurement with `bench:baseline` shows it
- * costing more later-referenced evidence than it saves requests. A read that a
- * later edit modified can still be the passage the session went on to quote. The
- * other two are provably redundant, because an identical request was made later.
- */
-export const DEFAULT_RULES: RuleSet = { duplicate: true, superseded: false, resolved: true }
 
 /**
  * Drops the transcript proves by itself, so they cost no Jev request:

@@ -14,6 +14,22 @@ const TEXT_HEAD = 400
 const TEXT_TAIL = 150
 const TASK_PROMPTS = 3
 
+type CallStyle = "full" | "brief" | "omit"
+
+interface Stage {
+  inputCap: number
+  abridgeOld: boolean
+  collapseOld: boolean
+  callStyle: CallStyle
+  dropOldTextless: boolean
+}
+
+export interface StateOptions {
+  maxStateTokens: number
+  preserveRecentMessages: number
+  task?: string
+}
+
 export function isPinned(index: number, total: number, preserveRecentMessages: number): boolean {
   return index === 0 || index >= total - preserveRecentMessages
 }
@@ -54,22 +70,6 @@ export function collectCalls(
     }
   })
   return calls
-}
-
-type CallStyle = "full" | "brief" | "omit"
-
-interface Stage {
-  inputCap: number
-  abridgeOld: boolean
-  collapseOld: boolean
-  callStyle: CallStyle
-  dropOldTextless: boolean
-}
-
-export interface StateOptions {
-  maxStateTokens: number
-  preserveRecentMessages: number
-  task?: string
 }
 
 function taskText(messages: readonly TranscriptMessage[]): string {

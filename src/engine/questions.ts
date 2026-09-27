@@ -5,6 +5,8 @@ import type { JevQuestions, ToolCall } from "./types.ts"
 /** Requests are not allowed to exceed this, whatever the token estimate says. */
 const OVERHEAD_TOKENS = 32
 
+export type QuestionStyle = "noul" | "choice"
+
 function collapse(text: string): string {
   return text.replace(/\s+/g, " ").trim()
 }
@@ -55,8 +57,6 @@ export function questionsFor(call: ToolCall, previewChars = 0): JevQuestions {
     },
   }
 }
-
-export type QuestionStyle = "noul" | "choice"
 
 /**
  * One three-way question instead of two independent ones.
