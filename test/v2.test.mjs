@@ -105,7 +105,9 @@ const ctx = {
   },
   app: { log: async () => {} },
   model: {
-    get: (providerID, modelID) => modelInfos[`${providerID}/${modelID}`],
+    // The runtime shape on 2.0.18: list() and default() exist, get() does not.
+    list: () => Object.values(modelInfos),
+    default: () => ({ providerID: "opencode-go", modelID: "qwen3.8-max" }),
   },
 }
 await definition.setup(ctx)
@@ -335,6 +337,8 @@ console.log("\n[effort]")
   check("effort: no declared support injects nothing", effortParts(undeclared).length === 0)
 
   modelInfos["opencode-go/qwen3.8-max"] = {
+    providerID: "opencode-go",
+    id: "qwen3.8-max",
     variants: [],
     compatibility: { supportsEffortUpdates: true },
   }
@@ -358,6 +362,8 @@ console.log("\n[effort]")
   )
 
   modelInfos["opencode-go/qwen3.8-max"] = {
+    providerID: "opencode-go",
+    id: "qwen3.8-max",
     variants: [{ id: "high" }, { id: "max" }],
     compatibility: { supportsEffortUpdates: true },
   }
@@ -371,6 +377,8 @@ console.log("\n[effort]")
   )
 
   modelInfos["opencode-go/qwen3.8-max"] = {
+    providerID: "opencode-go",
+    id: "qwen3.8-max",
     variants: [{ id: "max" }],
     compatibility: { supportsEffortUpdates: false },
   }
@@ -382,6 +390,8 @@ console.log("\n[effort]")
   )
 
   modelInfos["opencode-go/qwen3.8-max"] = {
+    providerID: "opencode-go",
+    id: "qwen3.8-max",
     variants: [],
     compatibility: { supportsEffortUpdates: true },
   }

@@ -192,27 +192,63 @@ function digestForEffort(messages: V2Message[], chars: number): string {
   return effortDigest({ task, messages: messages.length, toolCalls, chars: total }, chars)
 }
 
-/** What the target model supports, as far as the host will say. */
-function modelSupport(
-  ctx: { model?: { get?: (providerID: string, modelID: string) => unknown } },
+/**
+ * What the target model supports, as far as the host will say. The runtime API
+ * is `model.list()` / `model.default()` (both may be async) - `model.get` from
+ * the type definitions is not present on 2.0.18, so it is only tried first in
+ * case a later host has it.
+ */
+async function modelSupport(
+  ctx: { model?: unknown },
   model: { providerID?: string; id?: string } | undefined,
-): { variants: string[]; supports?: boolean } {
+): Promise<{ variants: string[]; supports?: boolean }> {
   try {
-    if (!model?.providerID || !model.id || typeof ctx.model?.get !== "function") {
-      return { variants: [] }
+    const domain = ctx.model as
+      | {
+          get?: (providerID: string, modelID: string) => unknown
+          list?: (providerID?: string) => unknown
+          default?: () => unknown
+        }
+      | undefined
+    if (!domain) return { variants: [] }
+
+    let providerID = model?.providerID
+    let modelID = model?.id
+    if ((!providerID || !modelID) && typeof domain.default === "function") {
+      const fallback = (await Promise.resolve(domain.default())) as
+        { providerID?: string; modelID?: string; id?: string } | undefined
+      providerID = providerID ?? fallback?.providerID
+      modelID = modelID ?? fallback?.modelID ?? fallback?.id
     }
-    const info = ctx.model.get(model.providerID, model.id) as
+    if (!providerID || !modelID) return { variants: [] }
+
+    let info: unknown
+    if (typeof domain.get === "function") info = domain.get(providerID, modelID)
+    if (!info && typeof domain.list === "function") {
+      const list = await Promise.resolve(domain.list())
+      if (Array.isArray(list)) {
+        info = list.find((entry) => {
+          const candidate = entry as { providerID?: string; id?: string; modelID?: string }
+          return (
+            candidate?.providerID === providerID &&
+            (candidate?.id === modelID || candidate?.modelID === modelID)
+          )
+        })
+      }
+    }
+
+    const typed = info as
       | {
           variants?: Array<{ id?: unknown }>
           compatibility?: { supportsEffortUpdates?: unknown }
         }
       | undefined
-    const variants = Array.isArray(info?.variants)
-      ? info.variants
+    const variants = Array.isArray(typed?.variants)
+      ? typed.variants
           .map((variant) => variant?.id)
           .filter((id): id is string => typeof id === "string")
       : []
-    const supports = info?.compatibility?.supportsEffortUpdates
+    const supports = typed?.compatibility?.supportsEffortUpdates
     return { variants, supports: typeof supports === "boolean" ? supports : undefined }
   } catch {
     return { variants: [] }
@@ -351,7 +387,7 @@ export const FastJevV2 = Plugin.define({
       model: { providerID?: string; id?: string } | undefined,
       sessionID: string | undefined,
     ): Promise<{ level: EffortLevel; ladder: EffortLevel[]; requests: number } | undefined> => {
-      const support = modelSupport(ctx, model)
+      const support = await modelSupport(ctx, model)
       // A content part the protocol does not expect is not a no-op: an OpenAI-chat
       // request fails outright ("user messages only support text and media
       // content"), which a live run confirmed. So an explicit yes is required and

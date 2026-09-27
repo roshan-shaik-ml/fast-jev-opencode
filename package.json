@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-opencode",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Verbatim context pruning for OpenCode v1 and v2: prune stale tool calls and truncate bulky tool results from the outgoing model request using TypeSafe Jev decisions, instead of summarizing context.",
   "type": "module",
   "main": "src/index.ts",
