@@ -1,45 +1,33 @@
 # fast-jev-opencode
 
+[![npm](https://img.shields.io/npm/v/fast-jev-opencode.svg)](https://www.npmjs.com/package/fast-jev-opencode)
 [![CI](https://github.com/roshan-shaik-ml/fast-jev-opencode/actions/workflows/ci.yml/badge.svg)](https://github.com/roshan-shaik-ml/fast-jev-opencode/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/fast-jev-opencode.svg)](./LICENSE)
 
-Verbatim context pruning for [OpenCode](https://opencode.ai) **v1 and v2**, powered by
-[TypeSafe Jev](https://docs.typesafe.ai). Instead of summarizing old turns, it scores every
-tool call and tool result with Jev and removes or truncates only the stale ones. Everything
-that stays is kept word for word.
+**Verbatim context pruning for [OpenCode](https://opencode.ai) v1 and v2.** Every request to the
+model is scored by [TypeSafe Jev](https://docs.typesafe.ai): stale tool calls are removed, bulky
+tool outputs are truncated, and everything that stays is kept word for word. Nothing is
+summarized and nothing is rewritten.
 
-One package, two adapters: v2 registers `ctx.session.hook("context", ...)`; v1 uses the legacy
-`experimental.chat.messages.transform` hook. The engine under `src/engine/` is this project's
-own implementation.
-
-## Compatibility
-
-| Host                | Entry        | Hook                                   | Minimum                       |
-| ------------------- | ------------ | -------------------------------------- | ----------------------------- |
-| OpenCode **v2**     | `setup()`    | `ctx.session.hook("context", ...)`     | any v2                        |
-| OpenCode **v1**     | `server()`   | `experimental.chat.messages.transform` | 1.18.29+ (object entrypoints) |
-| OpenCode v1 (older) | plugin array | `experimental.chat.messages.transform` | pin `#v0.1.0`                 |
-
-Both entrypoints come from one default export:
-
-```ts
-export default {
-  ...FastJevV2, // v2 calls setup()
-  async server(input, options) {
-    return FastJevV1(input, options) // v1 calls server()
-  },
-}
-```
-
-One difference worth knowing: in v1 the message hook also runs for the request that builds a
-`/compact` summary, so the pruner sees that request too, and the old hook payload does not say
-which kind of request it is. In v2 `context` covers only the agent loop; compaction is a
-separate hook this plugin touches only when `verbatimCheckpoint` is enabled, which it is not by
-default.
+- One package, two hosts: v2 registers `ctx.session.hook("context", …)`, v1 uses
+  `experimental.chat.messages.transform`.
+- Persisted history, the UI, and your files are never touched — only the outgoing request.
+- Fail-open everywhere: a missing key, timeout, transport error, or malformed answer leaves the
+  request exactly as it was.
+- Credential-shaped inputs and secrets in prose are redacted before anything is scored.
+- Optional per-request reasoning effort, chosen by Jev from the levels the model declares.
 
 ## Install
 
+Needs a Jev key from the [TypeSafe console](https://console.typesafe.ai).
+
 ```sh
 # OpenCode v2
+opencode plugin add fast-jev-opencode
+```
+
+```sh
+# or straight from GitHub
 opencode plugin add github:roshan-shaik-ml/fast-jev-opencode
 ```
 
@@ -50,33 +38,80 @@ opencode plugin add github:roshan-shaik-ml/fast-jev-opencode
 
 Versions older than 1.18.29 cannot load an object entrypoint; pin `#v0.1.0` on the same spec.
 
-Then:
+## Quick start
 
-1. Copy the example config to `~/.config/opencode/fast-jev.json` (also
-   [viewable in the repo](./fast-jev.example.json)).
-2. Add your Jev key — see below.
-3. Restart OpenCode. It starts in `dryRun` mode, so nothing is pruned until you set
-   `"dryRun": false`.
+1. Install with one of the commands above.
+2. Put your key where the plugin can find it:
 
-## TypeSafe API key
+   ```sh
+   printf 'TYPESAFE_API_KEY=your-key-here\n' >> ~/.config/opencode/.env
+   ```
 
-Create a key at <https://console.typesafe.ai>. The plugin resolves it in this order, first hit
-wins: inline `apiKey`, the `TYPESAFE_API_KEY` variable of the OpenCode process, a
-`TYPESAFE_API_KEY=...` line in `~/.config/opencode/.env` (easiest), or the file named by
-`apiKeyFile`.
+3. Restart OpenCode. It starts in `dryRun` mode, so nothing is pruned until you create
+   `~/.config/opencode/fast-jev.json` with `{ "dryRun": false }`. The full set of options is in
+   [fast-jev.example.json](./fast-jev.example.json).
 
-```sh
-printf 'TYPESAFE_API_KEY=your-key-here\n' >> ~/.config/opencode/.env
+Keys are resolved in order: inline `apiKey`, the `TYPESAFE_API_KEY` variable of the OpenCode
+process, a `TYPESAFE_API_KEY=…` line in `~/.config/opencode/.env` (easiest), or the file named by
+`apiKeyFile`. For `provider: "zen"` or `"openrouter"`, supply `OPENCODE_API_KEY` or
+`OPENROUTER_API_KEY` instead.
+
+## What it asks Jev
+
+For each candidate tool call the plugin sends one question — a three-way choice with the
+competing options spelled out, plus a short head/tail excerpt of the output so the decision is
+made on content rather than a byte count:
+
+```jsonc
+{
+  "state": {
+    "task": "Fix the failing /login test. Never edit src/generated.",
+    "history": [
+      { "role": "user", "text": "…" },
+      {
+        "role": "assistant",
+        "text": "…",
+        "calls": [
+          {
+            "n": 1,
+            "tool": "read",
+            "input": "{\"filePath\":\"src/auth.ts\"}",
+            "outcome": "ok",
+            "bytes": 4820,
+          },
+        ],
+      },
+    ],
+  },
+  "questions": {
+    "c1": {
+      "type": "choice",
+      "instructions": "Tool call c1 (read, 4820 characters of output) is in the conversation history. Decide what the next step still needs from it.\nOutput preview: export function login(… ) … }",
+      "criteria": {
+        "keep": "Both the call and its full output are still needed, and re-running the tool would not reproduce the output.",
+        "truncate": "The call still matters, but only a short head of its output does. The rest can go.",
+        "drop": "Neither the call nor its output matters for the next step; it is stale or superseded.",
+      },
+    },
+  },
+}
 ```
 
-For `provider: "zen"` or `"openrouter"`, supply `OPENCODE_API_KEY` or `OPENROUTER_API_KEY`
-instead. Without a valid key the plugin fails open: it warns and sends the request unchanged.
+Jev answers with probabilities, which are compared against two thresholds
+(`keepCallThreshold` / `keepResultThreshold`):
 
-## Configure
+```jsonc
+{ "answers": { "c1": { "probabilities": { "keep": 0.72, "truncate": 0.2, "drop": 0.08 } } } }
+```
+
+Calls the transcript can prove stale by itself — an identical request made later, or an error a
+later identical request resolved — are dropped without asking Jev at all. A pass that scored
+`minScored` calls and kept none is refused: a blanket removal is a bad answer, not a decision.
+
+## Configuration
 
 `~/.config/opencode/fast-jev.json` is re-read on every request, so edits apply without a
-restart. `FAST_JEV_CONFIG` points the plugin at a different file. The
-[example config](./fast-jev.example.json) lists every option; the ones worth knowing:
+restart. `FAST_JEV_CONFIG` points the plugin at a different file. The options most people touch:
 
 | Option                   | Default    | Meaning                                                              |
 | ------------------------ | ---------- | -------------------------------------------------------------------- |
@@ -84,105 +119,62 @@ restart. `FAST_JEV_CONFIG` points the plugin at a different file. The
 | `provider`               | `typesafe` | `typesafe`, `zen`, `openrouter`, or `custom`                         |
 | `keepCallThreshold`      | `0.25`     | Minimum probability for the call itself to stay                      |
 | `keepResultThreshold`    | `0.15`     | Minimum probability for its output to stay verbatim                  |
-| `questionStyle`          | `choice`   | `choice` asks one three-way question per call; `noul` asks two       |
+| `questionStyle`          | `choice`   | One three-way question per call, or `noul` for two yes/no questions  |
 | `preserveRecentMessages` | `6`        | Newest messages never judged                                         |
-| `minResultChars`         | `2000`     | Results below this are never candidates                              |
+| `minResultChars`         | `2000`     | Results below this size are never candidates                         |
 | `removedCallStyle`       | `"stub"`   | Keep a dropped call with its output cut short, or `"delete"` it      |
-| `protectTools`           | `[]`       | Tool names whose calls/results are always kept                       |
+| `protectTools`           | `[]`       | Tool names whose calls and results are always kept                   |
 | `cacheAware`             | `false`    | With `inputPrice` / `cachedInputPrice`, refuse prunes that cost more |
 | `verbatimCheckpoint`     | `false`    | At compaction, record the messages themselves instead of a summary   |
-| `effortEnabled`          | `false`    | v2: let Jev choose the request's reasoning effort (see below)        |
-| `effortLevels`           | see below  | Levels offered when the model declares none of its own               |
-| `logFile`                | `""`       | v2 only: append decisions to this file; `~` is expanded (see below)  |
-| `log`                    | `true`     | Structured logging via the host client                               |
+| `effortEnabled`          | `false`    | v2: let Jev choose the request's reasoning effort                    |
+| `logFile`                | `""`       | v2 only: append decisions to this file; `~` is expanded              |
 
-Presets: `typesafe` (`api.typesafe.ai/v1/systemone`, `jev-latest`), `zen`
+Provider presets: `typesafe` (`api.typesafe.ai/v1/systemone`, `jev-latest`), `zen`
 (`opencode.ai/zen/v1/systemone`, `jev-1.13-free`), `openrouter`
 (`openrouter.ai/api/v1/systemone`, `typesafe/jev-1.13`). `custom` needs `baseUrl` and `model`.
 
-## How it works
+## Seeing it work
 
-```
-outgoing request -> map OpenCode messages to the message model
-                 -> ask Jev one choice question per candidate tool call
-                    (keep / drop the result / drop the call too)
-                 -> rewrite only the outgoing request
-```
-
-A candidate is a tool call that is not pinned (first message / newest
-`preserveRecentMessages`), whose result is at least `minResultChars`, and whose tool is not in
-`protectTools`.
-
-- **Non-destructive:** persisted history, the UI, and stored sessions are never modified — only
-  the request sent to the model.
-- **Verbatim:** user and assistant text is never rewritten; only tool calls are dropped and
-  tool outputs truncated.
-- **Fail-open:** a missing key, timeout, transport error, malformed answer, or unreadable config
-  leaves the request untouched.
-- **Redacted:** tool inputs lose credential-named fields and secret-shaped strings before
-  anything is sent to the Jev endpoint.
-- **Informed and guarded:** each result reaches Jev as a size plus a head/tail excerpt
-  (`peekChars`); a pass that scored `minScored` calls and kept none is refused outright, because
-  a blanket removal is a bad answer rather than a decision.
-- **Free where provable:** an identical later request, or an error an identical later request
-  resolved, is dropped with zero Jev requests. The `superseded` rule ships off — it cost more
-  later-referenced evidence than it saved.
-- **Shape-preserving:** a call rated as no longer needed keeps its place with the output cut
-  short (`removedCallStyle: "stub"`). Deleting it leaves the assistant's narration with no
-  evidence behind it.
-- **Cached and cost-aware:** decisions are cached per call id (`rejudgeAfterMs`); with
-  `inputPrice` / `cachedInputPrice` and `cacheAware: true` a prune is refused when the cache it
-  invalidates costs more than the tokens it removes.
-
-## Effort selection
-
-Off by default; set `effortEnabled: true` to use. Before the pruning pass the plugin asks
-Jev one question — how much reasoning does this request need? — and records the answer as an
-`effort` part on the outgoing request. The host resolves that into whatever the provider
-speaks: OpenAI's `reasoning_effort`, a thinking budget, or a boolean and a budget. The plugin
-never writes provider dialect itself, which matters because every provider expresses effort
-differently.
-
-The levels offered to Jev are computed for the target model, first hit wins:
-
-1. `effortModels["provider/model"]`, or `effortModels["provider"]`, from your config.
-2. The variants that model declares — the host's own idea of effort for it.
-3. `effortLevels`, default `["low", "medium", "high"]`: the slice essentially every provider
-   expresses, so a choice is always expressible.
-
-The part is injected **only** when the host explicitly declares
-`compatibility.supportsEffortUpdates: true` for the model. Silence is not permission: a protocol
-that does not expect an effort part rejects the entire request (an OpenAI-chat run fails with
-"user messages only support text and media content"), so anything other than an explicit yes
-does nothing. The decision is cached per session and digest for `rejudgeAfterMs`, so a turn asks
-once, and a failure fails open with the request untouched. v1 has no effort parts, so this is
-v2-only.
-
-## Watching it work
-
-v2 hands plugins no log sink, so the plugin's output has nowhere to go unless you give it a
-file:
-
-```json
-{ "logFile": "~/.local/share/opencode/fast-jev.log" }
-```
-
-One line per decision, counts only — no prompts, no tool output, no keys:
+v2 gives plugins no log sink, so the plugin's output has nowhere to go unless you give it a
+file. Set `"logFile": "~/.local/share/opencode/fast-jev.log"` and it writes one line per
+decision — counts only, no prompts, no tool output, no keys:
 
 ```
 2026-09-27T00:12:03Z [fast-jev] info: pruned outgoing request {"droppedCalls":0,"stubbedCalls":1,"droppedResults":2,"removedMessages":0,"ruleDrops":0,"requests":1,"stateTokens":8159,"estimatedCostUsd":0,"stage":"full"}
 ```
 
-Set `logFile` alone and logging turns on; setting `log: false` with a `logFile` present is
-treated as "log to the file only". The file rotates to `.old` at 2 MB.
+Set `logFile` alone and logging turns on. The file rotates to `.old` at 2 MB. This option is
+v2-only and ignored by v1, whose host surfaces plugin logs itself.
 
-This option is v2-only and ignored by the v1 adapter, which needs no file: v1's host surfaces
-plugin logs itself through `client.app.log`.
+A quiet file is not always a fault: nothing is judged unless a result is at least
+`minResultChars` and older than the newest `preserveRecentMessages` messages, and the keep-signal
+guard can refuse a pass outright. Short sessions legitimately produce nothing.
 
-A quiet file is not always a fault. Nothing is judged unless a result is at least
-`minResultChars` (2000 by default) and older than the newest `preserveRecentMessages` messages,
-and a pass that scored `minScored` calls without keeping any is refused on purpose. Short
-sessions legitimately produce nothing.
+## How it works
+
+```
+outgoing request -> map OpenCode messages to the message model
+                 -> drop what the transcript proves stale (no request)
+                 -> ask Jev one choice question per remaining candidate
+                 -> rewrite only the outgoing request
+```
+
+A candidate is a tool call that is not pinned (the first message or the newest
+`preserveRecentMessages`), whose result is at least `minResultChars`, and whose tool is not in
+`protectTools`. Calls rated as no longer needed keep their place with the output cut short
+(`removedCallStyle: "stub"`), so the assistant's narration never loses the evidence behind it.
+
+## Effort selection (v2, opt-in)
+
+With `effortEnabled: true`, the plugin asks Jev one extra question — how much reasoning does
+this request need? — and records the answer as an `effort` part on the outgoing request, which
+the host resolves into whatever the provider speaks (OpenAI's `reasoning_effort`, a thinking
+budget, and so on). The levels offered are computed for the target model: your
+`effortModels["provider/model"]` override first, then the variants the model declares, then
+`effortLevels` (default `low`/`medium`/`high`). Injection happens **only** when the host
+explicitly declares `compatibility.supportsEffortUpdates: true` for that model; anything else,
+including silence, does nothing. The decision is cached per session and digest, and failures
+fail open.
 
 ## Measured
 
@@ -193,18 +185,13 @@ npm run bench:baseline  # selection vs plain head+tail truncation, size-equalise
 npm run bench:replay    # the same over a real session from OpenCode's SQLite store
 ```
 
-`bench` drives the engine and the adapter over the same transcript with the same stubbed
-answers and finds them identical on all 24 decisions. `bench:replay` across eight real sessions
-saves **25.3%** of outgoing request characters on average with the shipped defaults and 42.5%
-with aggressive settings; roughly half of a real session's payload is tool _inputs_, which is
-why clearing outputs alone tops out near 10%.
-
-Selection is not magic: size-equalised against plain head+tail truncation it keeps comparable
-evidence, so install this for the safety — pairing preserved, text untouched, secrets redacted,
-failures failing open — not for the number. Defaults were calibrated from live `choice` answers
-on real sessions, where call readings sat at 0.26–0.42 and results at 0.09–0.21; the older
-0.5/0.25 pair made `keep` unreachable. Tokens are estimated with the plugin's own estimator,
-not provider-billed tokens.
+Across eight real sessions the defaults saved **25.3%** of outgoing request characters on
+average, 42.5% with aggressive settings; roughly half of a real session's payload is tool
+_inputs_, which is why clearing outputs alone tops out near 10%. Selection is not magic —
+size-equalised against plain truncation it keeps comparable evidence — so install this for the
+safety: pairing preserved, text untouched, secrets redacted, failures failing open. Defaults
+were calibrated from live `choice` answers on real sessions. Tokens are estimated with the
+plugin's own estimator, not provider-billed tokens.
 
 ## Development
 
