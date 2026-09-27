@@ -78,15 +78,12 @@ Windows: use `npm.cmd`, not `npm` (a stray 0-byte `npm` shadows it on this machi
    verify with `npmjs.com/search?q=fast-jev-opencode`. Do not attempt to inflate download
    counts; it is metric manipulation and npm acts on it.
 
-5. **Publish 0.4.3** — packed and verified (`fast-jev-opencode-0.4.3.tgz`), carrying the
-   rewritten README. Waiting on the owner's 2FA:
-
-   ```powershell
-   npm.cmd publish fast-jev-opencode-0.4.3.tgz
-   ```
+5. **Publishing** — follow [RELEASING.md](./RELEASING.md). `0.4.3` is out and npm, the tag, and
+   the release all agree; every version goes out the same way: bump both manifests, tag, and
+   publish the tarball the suites passed against.
 
 ## Open owner actions
 
-- Publish 0.4.3 (2FA) so the npm page shows the new README.
 - Restart OpenCode to load the current build in interactive sessions.
 - Rotate the `~/.config/opencode/service.json` password — it was exposed once in a chat log.
+- The ecosystem-listing PR needs an explicit go-ahead before anyone opens it.
